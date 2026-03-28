@@ -5,6 +5,7 @@ using BndRadio.Services;
 namespace BndRadio.Controllers;
 
 public record SuggestRequest(Guid SongId);
+public record GrantSkipRequest(string SessionId);
 
 [ApiController]
 [Route("queue")]
@@ -150,23 +151,82 @@ public class QueueController : ControllerBase
         if (string.IsNullOrWhiteSpace(sessionId))
             return BadRequest("X-Session-Id header required");
 
-        if (!string.IsNullOrWhiteSpace(sessionId))
+        // Admins can skip directly (JWT required)
+        bool isAdmin = User.Identity?.IsAuthenticated == true;
+
+        if (!isAdmin)
         {
-            var cooldown = _presence.CheckSkipCooldown(sessionId);
-            if (cooldown > 0) return StatusCode(429, $"Skip cooldown: {cooldown}s remaining");
+            // Non-admins need a grant from admin
+            if (!_presence.ConsumeSkipGrant(sessionId))
+                return StatusCode(403, new { error = "no_permission", message = "Запросите разрешение у администратора" });
         }
 
-        var (voteCount, triggered) = _presence.VoteSkip(sessionId, current.Id);
-
-        if (triggered)
+        // Admin direct skip — bypass vote threshold
+        if (isAdmin)
         {
             _presence.ResetSkipVotes(current.Id);
             _streamServer.SkipCurrent();
             await _cache.DeleteAsync("queue:state");
-            return Ok(new { skipped = true, votes = voteCount, needed = PresenceService.SkipThreshold });
+            return Ok(new { skipped = true, votes = 0, needed = PresenceService.SkipThreshold });
         }
 
-        return Ok(new { skipped = false, votes = voteCount, needed = PresenceService.SkipThreshold });
+        // Granted user skip — also direct
+        _presence.ResetSkipVotes(current.Id);
+        _streamServer.SkipCurrent();
+        await _cache.DeleteAsync("queue:state");
+        return Ok(new { skipped = true, votes = 0, needed = PresenceService.SkipThreshold });
+    }
+
+    [HttpPost("skip/grant")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public IActionResult GrantSkip([FromBody] GrantSkipRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SessionId))
+            return BadRequest("sessionId required");
+
+        _presence.GrantSkip(request.SessionId);
+        return Ok(new { granted = true });
+    }
+
+    [HttpGet("skip/status")]
+    public IActionResult SkipStatus()
+    {
+        var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return BadRequest("X-Session-Id header required");
+
+        return Ok(new { hasGrant = _presence.HasSkipGrant(sessionId) });
+    }
+
+    [HttpPost("skip/request")]
+    public async Task<IActionResult> RequestSkip()
+    {
+        var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return BadRequest("X-Session-Id header required");
+
+        // Get username from presence
+        var username = _presence.GetUsername(sessionId) ?? (sessionId.Length >= 8 ? sessionId[..8] : sessionId);
+        _presence.RequestSkip(sessionId, username);
+
+        return Ok(new { requested = true });
+    }
+
+    [HttpDelete("skip/request")]
+    public IActionResult CancelSkipRequest()
+    {
+        var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(sessionId))
+            _presence.CancelSkipRequest(sessionId);
+        return Ok();
+    }
+
+    [HttpGet("skip/requests")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public IActionResult GetSkipRequests()
+    {
+        var requests = _presence.GetSkipRequests();
+        return Ok(requests.Select(r => new { sessionId = r.SessionId, username = r.Username }));
     }
 
     [HttpGet("history")]

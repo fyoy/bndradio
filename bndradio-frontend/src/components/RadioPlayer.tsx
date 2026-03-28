@@ -36,8 +36,12 @@ export default function RadioPlayer() {
   const [showUsersTooltip, setShowUsersTooltip] = useState(false)
   const [skipVotes, setSkipVotes] = useState(0)
   const [mySkipVote, setMySkipVote] = useState(false)
-  const [skipCooldown, setSkipCooldown] = useState(0)
+  const [skipGranted, setSkipGranted] = useState(false)
+  const [skipRequested, setSkipRequested] = useState(false)
+  const [skipRequests, setSkipRequests] = useState<{ sessionId: string; username: string }[]>([])
   const [showColorPicker, setShowColorPicker] = useState(false)
+  const colorPickerRef = useRef<HTMLDivElement>(null)
+  const colorIconRef = useRef<HTMLSpanElement>(null)
   const [userColor, setUserColorState] = useState(getUserColor)
   const [trackFlash, setTrackFlash] = useState(false)
   const [skipShake, setSkipShake] = useState(false)
@@ -127,10 +131,34 @@ const startEditName = () => {
   }, [sessionId, username, userColor, pingPresence])
 
   useEffect(() => {
-    if (skipCooldown <= 0) return
-    const id = setInterval(() => setSkipCooldown(s => Math.max(0, s - 1)), 1000)
+    if (!showColorPicker) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      const inPicker = colorPickerRef.current?.contains(t)
+      const inIcon   = colorIconRef.current?.contains(t)
+      if (!inPicker && !inIcon) setShowColorPicker(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [showColorPicker])
+
+  // Poll for skip grant when requested and not yet granted
+  useEffect(() => {
+    if (!skipRequested || skipGranted || isAdmin) return
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch('/queue/skip/status', { headers: { 'X-Session-Id': sessionId } })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.hasGrant) {
+            setSkipGranted(true)
+            setSkipRequested(false)
+          }
+        }
+      } catch { /* ignore */ }
+    }, 2000)
     return () => clearInterval(id)
-  }, [skipCooldown])
+  }, [skipRequested, skipGranted, isAdmin, sessionId])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -236,6 +264,9 @@ const skipVotesRef = useRef(skipVotes)
       setOnlineUsers(p.users)
     }, []),
     onReaction: useCallback((_emoji: string) => {}, []),
+    onSkipRequests: useCallback((reqs: { sessionId: string; username: string }[]) => {
+      setSkipRequests(reqs)
+    }, []),
   })
 
   // Local progress tick
@@ -350,7 +381,7 @@ const skipVotesRef = useRef(skipVotes)
                     </span>
                   </span>
                   {showColorPicker && (
-                    <div className="color-picker">
+                    <div className="color-picker" ref={colorPickerRef}>
                       {COLORS.map(c => (
                         <button
                           key={c}
@@ -448,9 +479,11 @@ const skipVotesRef = useRef(skipVotes)
                     />
                   </svg>
                   <button
-                    className={`play-btn${playing ? ' stop' : ''}${buffering ? ' buffering' : ''}`}
+                    className={`play-btn${playing ? ' stop' : ''}${buffering ? ' buffering' : ''}${!valid && !playing ? ' play-btn--disabled' : ''}`}
                     onClick={playing ? stopPlayback : startPlayback}
-                    aria-label={playing ? 'Остановить эфир' : 'Слушать эфир'}
+                    disabled={!valid && !playing}
+                    aria-label={playing ? 'Остановить эфир' : !valid ? 'Нет песен в очереди' : 'Слушать эфир'}
+                    title={!valid && !playing ? 'Нет песен для воспроизведения' : undefined}
                   >
                     <span className="play-btn-icon" aria-hidden="true">
                       {buffering
@@ -463,44 +496,98 @@ const skipVotesRef = useRef(skipVotes)
                   </button>
                 </div>
                 <button
-                  className={`skip-btn${mySkipVote ? ' skip-btn--voted skip-btn--cooldown' : ''}${skipCooldown > 0 ? ' skip-btn--cooldown' : ''}`}
-                  disabled={mySkipVote || skipCooldown > 0}
+                  className={`skip-btn${mySkipVote ? ' skip-btn--voted' : ''}${skipGranted ? ' skip-btn--granted' : ''}${skipRequested ? ' skip-btn--requested' : ''}`}
+                  disabled={mySkipVote || skipRequested}
                   onClick={async () => {
-                    if (skipCooldown > 0) return
-                    const res = await fetch('/queue/skip', {
-                      method: 'POST',
-                      headers: { 'X-Session-Id': sessionId },
-                    })
-                    if (res.ok) {
-                      const data = await res.json()
-                      setSkipVotes(data.votes)
-                      setMySkipVote(true)
-                      setSkipCooldown(15)
-                      setSkipShake(true)
-                      setTimeout(() => setSkipShake(false), 400)
-                      if (data.skipped && playing) {
-                        const audio = audioRef.current
-                        if (!audio) return
-                        setTimeout(() => {
-                          audio.src = `${STREAM_URL}?t=${Date.now()}`
-                          audio.play().catch(() => {})
-                        }, 300)
+                    if (isAdmin) {
+                      // Admin: direct skip with JWT
+                      const res = await fetch('/queue/skip', {
+                        method: 'POST',
+                        headers: { 'X-Session-Id': sessionId, ...getAuthHeader() },
+                      })
+                      if (res.ok) {
+                        const data = await res.json()
+                        setSkipVotes(data.votes)
+                        setMySkipVote(true)
+                        setSkipShake(true)
+                        setTimeout(() => setSkipShake(false), 400)
+                        if (data.skipped && playing) {
+                          const audio = audioRef.current
+                          if (!audio) return
+                          setTimeout(() => {
+                            audio.src = `${STREAM_URL}?t=${Date.now()}`
+                            audio.play().catch(() => {})
+                          }, 300)
+                        }
                       }
+                    } else if (skipGranted) {
+                      // User with grant: execute skip
+                      const res = await fetch('/queue/skip', {
+                        method: 'POST',
+                        headers: { 'X-Session-Id': sessionId },
+                      })
+                      if (res.ok) {
+                        const data = await res.json()
+                        setSkipVotes(data.votes)
+                        setMySkipVote(true)
+                        setSkipGranted(false)
+                        setSkipShake(true)
+                        setTimeout(() => setSkipShake(false), 400)
+                        if (data.skipped && playing) {
+                          const audio = audioRef.current
+                          if (!audio) return
+                          setTimeout(() => {
+                            audio.src = `${STREAM_URL}?t=${Date.now()}`
+                            audio.play().catch(() => {})
+                          }, 300)
+                        }
+                      }
+                    } else {
+                      // User: request permission from admin
+                      setSkipRequested(true)
+                      await fetch('/queue/skip/request', {
+                        method: 'POST',
+                        headers: { 'X-Session-Id': sessionId },
+                      })
                     }
                   }}
-                  aria-label="Пропустить"
-                  title={mySkipVote ? 'Вы уже проголосовали' : skipCooldown > 0 ? `Подождите ${skipCooldown}с` : `Пропустить (${skipVotes}/3)`}
+                  aria-label={isAdmin ? 'Пропустить' : skipGranted ? 'Пропустить (разрешено)' : skipRequested ? 'Ожидание разрешения...' : 'Запросить пропуск'}
+                  title={isAdmin ? 'Пропустить трек' : skipGranted ? 'Нажмите чтобы пропустить' : skipRequested ? 'Ожидание разрешения от администратора...' : 'Запросить разрешение на пропуск у администратора'}
                 >
                   <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/>
                   </svg>
                   <span className="skip-count">
-                    {skipCooldown > 0 ? `${skipCooldown}` : skipVotes > 0 ? `${skipVotes}/3` : ''}
+                    {skipRequested ? '⏳' : skipGranted ? '✓' : ''}
                   </span>
                 </button>
               </div>
 
               <VolumeControl audioRef={audioRef} />
+
+              {/* Admin: skip requests panel */}
+              {isAdmin && skipRequests.length > 0 && (
+                <div className="skip-requests-panel">
+                  {skipRequests.map(r => (
+                    <div key={r.sessionId} className="skip-request-item">
+                      <span className="skip-request-name">{r.username}</span>
+                      <span className="skip-request-label">хочет пропустить</span>
+                      <button
+                        className="skip-request-grant-btn"
+                        onClick={async () => {
+                          await fetch('/queue/skip/grant', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                            body: JSON.stringify({ sessionId: r.sessionId }),
+                          })
+                        }}
+                      >
+                        Разрешить
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 

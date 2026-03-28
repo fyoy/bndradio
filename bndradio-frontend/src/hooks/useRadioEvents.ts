@@ -16,17 +16,23 @@ export interface PresenceState {
   users: { username: string; color: string }[]
 }
 
+export interface SkipRequest {
+  sessionId: string
+  username: string
+}
+
 interface Handlers {
   onState: (s: RadioState) => void
   onPresence: (p: PresenceState) => void
   onReaction?: (emoji: string) => void
+  onSkipRequests?: (requests: SkipRequest[]) => void
   sessionId: string
 }
 
 const RECONNECT_DELAY_MS = 2000
 const MAX_RECONNECT_DELAY_MS = 30_000
 
-export function useRadioEvents({ onState, onPresence, onReaction, sessionId }: Handlers) {
+export function useRadioEvents({ onState, onPresence, onReaction, onSkipRequests, sessionId }: Handlers) {
   const esRef = useRef<EventSource | null>(null)
   const reconnectDelay = useRef(RECONNECT_DELAY_MS)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -35,9 +41,11 @@ export function useRadioEvents({ onState, onPresence, onReaction, sessionId }: H
   const onStateRef = useRef(onState)
   const onPresenceRef = useRef(onPresence)
   const onReactionRef = useRef(onReaction)
+  const onSkipRequestsRef = useRef(onSkipRequests)
   onStateRef.current = onState
   onPresenceRef.current = onPresence
   onReactionRef.current = onReaction
+  onSkipRequestsRef.current = onSkipRequests
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
@@ -76,6 +84,13 @@ export function useRadioEvents({ onState, onPresence, onReaction, sessionId }: H
       try {
         const d = JSON.parse(e.data)
         onReactionRef.current?.(d.emoji)
+      } catch { }
+    })
+
+    es.addEventListener('skip_requests', (e: MessageEvent) => {
+      try {
+        const d = JSON.parse(e.data)
+        onSkipRequestsRef.current?.(d.requests ?? [])
       } catch { }
     })
 

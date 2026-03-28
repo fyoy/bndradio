@@ -138,7 +138,8 @@ public class StreamDeliveryTests : IClassFixture<StreamDeliveryTests.TestWebAppl
                 {
                     ["ConnectionStrings:DefaultConnection"] =
                         Environment.GetEnvironmentVariable("TEST_DATABASE_URL")
-                        ?? "Host=localhost;Port=5432;Database=bndradio_test;Username=bndradio;Password=bndradio"
+                        ?? "Host=localhost;Port=5432;Database=bndradio_test;Username=bndradio;Password=bndradio",
+                    ["Admin:JwtSecret"] = "test-jwt-secret-for-unit-tests-only-32chars",
                 });
             });
         }

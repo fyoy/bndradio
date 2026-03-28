@@ -13,6 +13,7 @@ public class SseBroadcaster : BackgroundService
 
     private string _lastStateHash = "";
     private string _lastPresenceHash = "";
+    private string _lastSkipRequestsHash = "";
 
     public SseBroadcaster(
         SseHub hub,
@@ -42,6 +43,7 @@ public class SseBroadcaster : BackgroundService
 
                 await BroadcastStateIfChangedAsync();
                 await BroadcastPresenceIfChangedAsync();
+                await BroadcastSkipRequestsIfChangedAsync();
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { _logger.LogWarning(ex, "SseBroadcaster tick error"); }
@@ -71,6 +73,18 @@ public class SseBroadcaster : BackgroundService
         await _cache.SetAsync("queue:state", payload, TimeSpan.FromSeconds(2));
         await _hub.BroadcastAsync("state", payload);
     }
+
+    private async Task BroadcastSkipRequestsIfChangedAsync()
+    {
+        var requests = _presence.GetSkipRequests();
+        var hash = string.Join("|", requests.Select(r => r.SessionId));
+        if (hash == _lastSkipRequestsHash) return;
+        _lastSkipRequestsHash = hash;
+
+        var payload = new { requests = requests.Select(r => new { sessionId = r.SessionId, username = r.Username }) };
+        await _hub.BroadcastAsync("skip_requests", payload);
+    }
+
 
     private async Task BroadcastPresenceIfChangedAsync()
     {

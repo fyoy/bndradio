@@ -1,0 +1,1 @@
+ALTER TABLE songs DROP COLUMN IF EXISTS audio_data;

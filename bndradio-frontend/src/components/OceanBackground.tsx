@@ -4,7 +4,7 @@ import * as THREE from 'three'
 // Вершинный шейдер — волны Герстнера + следы мыши
 const WAVE_VERT = `
 uniform float uTime;
-uniform vec3  uRipples[12];   // xy = world pos, z = birthTime
+uniform vec3  uRipples[12];
 #define MAX_RIPPLES 12
 
 varying vec2  vWorldXZ;
@@ -12,6 +12,7 @@ varying vec3  vNormal;
 varying vec3  vViewDir;
 varying float vFoam;
 varying float vMouseRipple;
+varying float vWaveHeight;
 
 vec3 gerstner(vec2 pos, vec2 dir, float wavelength, float steepness, float speed, float t) {
   float k  = 6.2831853 / wavelength;
@@ -47,7 +48,6 @@ void main() {
   binorm.y  += d1.y*k1*a1*cos(f1)+d2.y*k2*a2*cos(f2)+d3.y*k3*a3*cos(f3)+d4.y*k4*a4*cos(f4);
   vNormal = normalize(cross(binorm, tangent));
 
-  // следы мыши — расходящиеся круговые волны
   float rippleDisp = 0.0;
   float rippleAcc  = 0.0;
   for (int i = 0; i < MAX_RIPPLES; i++) {
@@ -55,9 +55,9 @@ void main() {
     float rBorn = uRipples[i].z;
     if (rBorn < 0.0) continue;
     float age    = uTime - rBorn;
-    float radius = age * 3.5;           // скорость расширения
+    float radius = age * 3.5;
     float dist   = length(pos.xz - rPos);
-    float decay  = exp(-age * 1.2);     // затухание по времени
+    float decay  = exp(-age * 1.2);
     float ring   = exp(-pow(dist - radius, 2.0) * 1.8) * decay;
     float wave   = sin(dist * 2.5 - age * 6.0) * ring * 0.18;
     rippleDisp  += wave;
@@ -65,7 +65,7 @@ void main() {
   }
   pos.y += rippleDisp;
   vMouseRipple = clamp(rippleAcc, 0.0, 1.0);
-
+  vWaveHeight  = clamp((pos.y + 0.5) / 1.2, 0.0, 1.0);
   vFoam = clamp((pos.y + 0.15) / 0.35, 0.0, 1.0);
 
   vec4 worldPos = modelMatrix * vec4(pos, 1.0);
@@ -74,7 +74,7 @@ void main() {
 }
 `
 
-// Фрагментный шейдер — Fresnel, отражение неба, рябь, пена, глубина
+// Фрагментный шейдер — Fresnel, отражение неба, дорожка светила, пена, туман
 const WAVE_FRAG = `
 uniform vec3  uSunDir;
 uniform vec3  uSunColor;
@@ -82,12 +82,14 @@ uniform vec3  uSkyZenith;
 uniform vec3  uSkyHorizon;
 uniform float uTime;
 uniform float uNightBlend;
+uniform vec2  uCelestialNDC; // экранные координаты светила [-1..1]
 
 varying vec2  vWorldXZ;
 varying vec3  vNormal;
 varying vec3  vViewDir;
 varying float vFoam;
 varying float vMouseRipple;
+varying float vWaveHeight;
 
 float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
 float noise(vec2 p){
@@ -103,33 +105,43 @@ void main() {
   float r2 = noise(rippleUV * 2.3 - vec2(uTime*0.5, uTime*0.2)) * 2.0 - 1.0;
   vec3 rippleN = normalize(vNormal + vec3(r1*0.12, 0.0, r2*0.12));
 
-  // Fresnel — угол обзора
   float cosTheta = max(dot(rippleN, vViewDir), 0.0);
   float fresnel = mix(0.04, 1.0, pow(1.0 - cosTheta, 4.0));
 
-  // цвет глубины — видна "толща" воды
   vec3 deepColor    = mix(vec3(0.0, 0.04, 0.16), vec3(0.0, 0.01, 0.07), uNightBlend);
   vec3 shallowColor = mix(vec3(0.02, 0.28, 0.52), vec3(0.01, 0.10, 0.28), uNightBlend);
-  // subsurface: чем меньше угол (смотрим сквозь воду), тем глубже цвет
-  float depthVis = pow(cosTheta, 1.5); // 0 = смотрим под углом (глубоко), 1 = сверху
+  float depthVis = pow(cosTheta, 1.5);
   vec3 waterBody = mix(deepColor, shallowColor, depthVis * 0.7 + vFoam * 0.3);
 
-  // подводное рассеяние — лёгкий бирюзовый оттенок на мелководье
   vec3 subsurface = mix(vec3(0.0, 0.18, 0.35), vec3(0.0, 0.06, 0.18), uNightBlend);
   waterBody = mix(waterBody, subsurface, (1.0 - fresnel) * 0.35);
 
-  // отражение неба
   vec3 reflDir = reflect(-vViewDir, rippleN);
   float skyT = clamp(reflDir.y * 0.5 + 0.5, 0.0, 1.0);
   vec3 skyRefl = mix(uSkyHorizon, uSkyZenith, pow(skyT, 0.6));
 
-  // блик Blinn-Phong
+  // --- дорожка светила на воде ---
+  // отражённый вектор взгляда в NDC-пространстве (приближение)
+  vec3 reflDirN = normalize(reflDir);
+  // угол между отражением и направлением на светило
+  float sunDot = dot(reflDirN, normalize(uSunDir));
+  // широкая мягкая дорожка
+  float trail = pow(max(sunDot, 0.0), 6.0) * 1.8;
+  // узкий яркий блик поверх
+  float trailSharp = pow(max(sunDot, 0.0), 80.0) * 3.0;
+  // модулируем рябью чтобы дорожка "мерцала"
+  vec2 microUV2 = vWorldXZ * 2.2;
+  float rippleMod = 0.6 + 0.4 * noise(microUV2 + vec2(uTime*0.6, uTime*0.4));
+  trail *= rippleMod;
+  trailSharp *= rippleMod;
+  vec3 trailColor = uSunColor * (trail + trailSharp);
+
+  // Blinn-Phong блик
   vec3 halfV = normalize(uSunDir + vViewDir);
   float spec = pow(max(dot(rippleN, halfV), 0.0), 256.0);
   float specNight = pow(max(dot(rippleN, halfV), 0.0), 512.0);
   vec3 specColor = uSunColor * mix(spec * 1.8, specNight * 0.6, uNightBlend);
 
-  // мелкие блики ряби
   vec2 microUV = vWorldXZ * 3.5;
   float m1 = noise(microUV + vec2(uTime*0.9, uTime*0.6));
   float m2 = noise(microUV * 1.8 - vec2(uTime*0.7, uTime*1.1));
@@ -137,26 +149,26 @@ void main() {
   float microSpec = pow(max(dot(microN, normalize(uSunDir + vViewDir)), 0.0), 512.0);
   specColor += uSunColor * microSpec * mix(0.9, 0.3, uNightBlend);
 
-  // смешиваем тело воды + отражение неба через Fresnel
   vec3 color = mix(waterBody, skyRefl, fresnel * 0.6);
   color += specColor;
+  color += trailColor * mix(0.55, 0.35, uNightBlend);
 
-  // пена
+  // пена на гребнях волн
   float foam = smoothstep(0.6, 0.85, vFoam);
   color = mix(color, vec3(0.92, 0.96, 1.0), foam * 0.5);
 
-  // след мыши — лёгкое осветление
+  // след мыши
   color = mix(color, color * 1.3 + vec3(0.05, 0.12, 0.18), vMouseRipple * 0.5);
 
-  // туман к горизонту
-  float fogFactor = clamp(1.0 - gl_FragCoord.z / gl_FragCoord.w * 0.04, 0.0, 1.0);
-  color = mix(uSkyHorizon, color, fogFactor);
+  // туман к горизонту — плавное смешение с цветом горизонта
+  float depth = gl_FragCoord.z / gl_FragCoord.w;
+  float fogFactor = exp(-depth * 0.028);
+  color = mix(uSkyHorizon * 0.85, color, clamp(fogFactor, 0.0, 1.0));
 
   gl_FragColor = vec4(color, 1.0);
 }
 `
 
-// Шейдер неба
 const SKY_VERT = `
 varying vec2 vUv;
 void main() {
@@ -174,7 +186,6 @@ void main() {
 }
 `
 
-// Шейдер звёзд
 const STAR_VERT = `
 uniform float uTime;
 attribute float aSize;
@@ -198,7 +209,6 @@ void main() {
 }
 `
 
-// Шейдер облаков
 const CLOUD_VERT = `
 varying vec2 vUv;
 void main() {
@@ -211,7 +221,6 @@ uniform float uTime;
 uniform float uOffset;
 uniform float uAlpha;
 varying vec2 vUv;
-
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
   vec2 i = floor(p); vec2 f = fract(p);
@@ -226,7 +235,6 @@ float fbm(vec2 p) {
   v += noise(p * 4.3 + vec2(8.3, 2.8)) * 0.125;
   return v;
 }
-
 void main() {
   vec2 uv = vUv;
   uv.x += uTime * 0.012 + uOffset;
@@ -235,6 +243,36 @@ void main() {
   float fadeX = smoothstep(0.0, 0.18, vUv.x) * smoothstep(1.0, 0.82, vUv.x);
   float fadeY = smoothstep(0.0, 0.25, vUv.y) * smoothstep(1.0, 0.55, vUv.y);
   gl_FragColor = vec4(1.0, 1.0, 1.0, cloud * fadeX * fadeY * uAlpha);
+}
+`
+
+// Шейдер частиц пены
+const FOAM_VERT = `
+uniform float uTime;
+attribute float aOffset;
+attribute float aSpeed;
+attribute float aWavePhase;
+varying float vAlpha;
+void main() {
+  vec3 pos = position;
+  // дрейф по поверхности
+  pos.x += sin(uTime * aSpeed * 0.4 + aOffset) * 0.6;
+  pos.z += cos(uTime * aSpeed * 0.3 + aOffset * 1.3) * 0.4;
+  // вертикальное покачивание на волне
+  pos.y += sin(uTime * aSpeed + aWavePhase) * 0.18;
+  vAlpha = 0.3 + 0.4 * abs(sin(uTime * 0.7 + aOffset));
+  vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  gl_PointSize = 3.0 * (1.0 / -mv.z) * 120.0;
+  gl_Position = projectionMatrix * mv;
+}
+`
+const FOAM_FRAG = `
+varying float vAlpha;
+void main() {
+  float d = length(gl_PointCoord - vec2(0.5));
+  if (d > 0.5) discard;
+  float a = smoothstep(0.5, 0.15, d) * vAlpha;
+  gl_FragColor = vec4(0.9, 0.96, 1.0, a);
 }
 `
 
@@ -299,6 +337,11 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
     camera.position.set(0, 5, 16)
     camera.lookAt(0, 0, 0)
 
+    // целевая позиция камеры для параллакса
+    const camTarget = new THREE.Vector3(0, 5, 16)
+    const camLookTarget = new THREE.Vector3(0, 0, 0)
+    let mouseParallaxX = 0, mouseParallaxY = 0
+
     // --- небо ---
     const skyGeo = new THREE.PlaneGeometry(200, 80)
     const skyMat = new THREE.ShaderMaterial({
@@ -354,7 +397,7 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
       cloudMats.push(cMat)
     }
 
-    // --- солнце / луна — рисуем на плоскости неба (z=-39), renderOrder между небом и водой ---
+    // --- солнце / луна ---
     const celestialGeo = new THREE.CircleGeometry(1.8, 32)
     const celestialMat = new THREE.MeshBasicMaterial({ color: 0xfffbe0, depthWrite: false, depthTest: false })
     const celestialMesh = new THREE.Mesh(celestialGeo, celestialMat)
@@ -366,7 +409,7 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
     glowMesh.renderOrder = 1
     scene.add(glowMesh)
 
-    // --- море (высокая сегментация для волн Герстнера) ---
+    // --- море ---
     const SEG = 160
     const oceanGeo = new THREE.PlaneGeometry(80, 60, SEG, SEG)
     oceanGeo.rotateX(-Math.PI / 2)
@@ -374,13 +417,14 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
       vertexShader: WAVE_VERT,
       fragmentShader: WAVE_FRAG,
       uniforms: {
-        uTime:       { value: 0 },
-        uSunDir:     { value: new THREE.Vector3(0, 1, 0.5).normalize() },
-        uSunColor:   { value: new THREE.Color(1.0, 0.95, 0.8) },
-        uSkyZenith:  { value: new THREE.Color(0.1, 0.4, 0.9) },
-        uSkyHorizon: { value: new THREE.Color(0.53, 0.81, 0.98) },
-        uNightBlend: { value: 0 },
-        uRipples:    { value: Array.from({ length: 12 }, () => new THREE.Vector3(0, 0, -1)) },
+        uTime:          { value: 0 },
+        uSunDir:        { value: new THREE.Vector3(0, 1, 0.5).normalize() },
+        uSunColor:      { value: new THREE.Color(1.0, 0.95, 0.8) },
+        uSkyZenith:     { value: new THREE.Color(0.1, 0.4, 0.9) },
+        uSkyHorizon:    { value: new THREE.Color(0.53, 0.81, 0.98) },
+        uNightBlend:    { value: 0 },
+        uRipples:       { value: Array.from({ length: 12 }, () => new THREE.Vector3(0, 0, -1)) },
+        uCelestialNDC:  { value: new THREE.Vector2(0, 0.5) },
       },
       transparent: false,
     })
@@ -388,6 +432,34 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
     ocean.position.y = -1
     ocean.renderOrder = 2
     scene.add(ocean)
+
+    // --- частицы пены ---
+    const FOAM_COUNT = 120
+    const foamPos    = new Float32Array(FOAM_COUNT * 3)
+    const foamOffset = new Float32Array(FOAM_COUNT)
+    const foamSpeed  = new Float32Array(FOAM_COUNT)
+    const foamPhase  = new Float32Array(FOAM_COUNT)
+    for (let i = 0; i < FOAM_COUNT; i++) {
+      foamPos[i*3]   = (Math.random()-0.5) * 60
+      foamPos[i*3+1] = -0.5 + Math.random() * 0.4
+      foamPos[i*3+2] = (Math.random()-0.5) * 40
+      foamOffset[i]  = Math.random() * Math.PI * 2
+      foamSpeed[i]   = 0.5 + Math.random() * 1.0
+      foamPhase[i]   = Math.random() * Math.PI * 2
+    }
+    const foamGeo = new THREE.BufferGeometry()
+    foamGeo.setAttribute('position', new THREE.BufferAttribute(foamPos, 3))
+    foamGeo.setAttribute('aOffset',  new THREE.BufferAttribute(foamOffset, 1))
+    foamGeo.setAttribute('aSpeed',   new THREE.BufferAttribute(foamSpeed, 1))
+    foamGeo.setAttribute('aWavePhase', new THREE.BufferAttribute(foamPhase, 1))
+    const foamMat = new THREE.ShaderMaterial({
+      vertexShader: FOAM_VERT, fragmentShader: FOAM_FRAG,
+      uniforms: { uTime: { value: 0 } },
+      transparent: true, depthWrite: false,
+    })
+    const foamPoints = new THREE.Points(foamGeo, foamMat)
+    foamPoints.renderOrder = 3
+    scene.add(foamPoints)
 
     let rafId = 0
     const clock = new THREE.Clock()
@@ -398,23 +470,27 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
     const ripples = oceanMat.uniforms.uRipples.value as THREE.Vector3[]
     let rippleIdx = 0
     let lastMouseX = -1, lastMouseY = -1
-    const mousePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 1) // y = -1 (позиция океана)
+    const mousePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 1)
     const raycaster = new THREE.Raycaster()
     const mouseNDC = new THREE.Vector2()
     const hitPoint = new THREE.Vector3()
 
     const onMouseMove = (e: MouseEvent) => {
+      const nx = (e.clientX / window.innerWidth) * 2 - 1
+      const ny = -(e.clientY / window.innerHeight) * 2 + 1
+
+      // параллакс камеры
+      mouseParallaxX = nx * 1.4
+      mouseParallaxY = ny * 0.7
+
       const dx = e.clientX - lastMouseX
       const dy = e.clientY - lastMouseY
       const speed = Math.sqrt(dx*dx + dy*dy)
       lastMouseX = e.clientX
       lastMouseY = e.clientY
-      if (speed < 4) return // игнорируем медленное движение
+      if (speed < 4) return
 
-      mouseNDC.set(
-        (e.clientX / window.innerWidth) * 2 - 1,
-        -(e.clientY / window.innerHeight) * 2 + 1
-      )
+      mouseNDC.set(nx, ny)
       raycaster.setFromCamera(mouseNDC, camera)
       if (raycaster.ray.intersectPlane(mousePlane, hitPoint)) {
         ripples[rippleIdx % MAX_RIPPLES].set(hitPoint.x, hitPoint.z, clock.getElapsedTime())
@@ -434,7 +510,6 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
       skyMat.uniforms.uHorizon.value.setRGB(...sky.horizon)
       skyMat.uniforms.uZenith.value.setRGB(...sky.zenith)
 
-      // солнце: 6ч=левый край, 12ч=верх, 18ч=правый край
       const dayFraction = (hour - 6) / 12
       const sunAngle = (dayFraction - 0.5) * Math.PI
       const cx = ORBIT_CX + Math.sin(sunAngle) * ORBIT_R
@@ -442,7 +517,6 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
       celestialMesh.position.set(cx, cy, ORBIT_Z + 2)
       glowMesh.position.set(cx, cy, ORBIT_Z + 1)
 
-      // скрываем когда ниже горизонта (ночью луна тоже по той же орбите)
       const aboveHorizon = cy > ORBIT_CY - 2
       celestialMesh.visible = aboveHorizon
       glowMesh.visible = aboveHorizon
@@ -453,15 +527,18 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
         celestialMat.color.copy(sunColor)
         glowMat.color.copy(sunColor)
         glowMat.opacity = 0.18 + sunT * 0.1
-        oceanMat.uniforms.uSunColor.value.setRGB(
-          sunColor.r * 1.2, sunColor.g * 1.1, sunColor.b * 0.9
-        )
+        oceanMat.uniforms.uSunColor.value.setRGB(sunColor.r * 1.2, sunColor.g * 1.1, sunColor.b * 0.9)
       } else {
         celestialMat.color.set(0xdde8ff)
         glowMat.color.set(0xaabbdd)
         glowMat.opacity = 0.12
         oceanMat.uniforms.uSunColor.value.setRGB(0.7, 0.75, 0.9)
       }
+
+      // NDC координаты светила для шейдера дорожки
+      const celestialWorld = new THREE.Vector3(cx, cy, ORBIT_Z + 2)
+      const celestialNDC = celestialWorld.clone().project(camera)
+      oceanMat.uniforms.uCelestialNDC.value.set(celestialNDC.x, celestialNDC.y)
 
       starMat.uniforms.uTime.value = elapsed
       starMat.uniforms.uNightAlpha.value = sky.nightAlpha
@@ -478,6 +555,14 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
       oceanMat.uniforms.uNightBlend.value = sky.nightAlpha
       oceanMat.uniforms.uSkyZenith.value.setRGB(...sky.zenith)
       oceanMat.uniforms.uSkyHorizon.value.setRGB(...sky.horizon)
+
+      foamMat.uniforms.uTime.value = elapsed
+
+      // плавный параллакс камеры (lerp к цели)
+      camTarget.set(mouseParallaxX, 5 + mouseParallaxY * 0.5, 16)
+      camera.position.lerp(camTarget, 0.04)
+      camLookTarget.set(mouseParallaxX * 0.3, mouseParallaxY * 0.2, 0)
+      camera.lookAt(camLookTarget)
 
       renderer.render(scene, camera)
       rafId = requestAnimationFrame(animate)
@@ -500,6 +585,7 @@ export default function OceanBackground({ timeOverride }: { timeOverride?: 'day'
       oceanGeo.dispose(); oceanMat.dispose()
       skyGeo.dispose(); skyMat.dispose()
       starGeo.dispose(); starMat.dispose()
+      foamGeo.dispose(); foamMat.dispose()
       mount.removeChild(renderer.domElement)
     }
   }, [])

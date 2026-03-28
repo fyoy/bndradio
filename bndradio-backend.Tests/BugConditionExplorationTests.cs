@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace BndRadio.Tests;
@@ -445,14 +446,33 @@ public class BugConditionExplorationTests : IClassFixture<BugConditionExploratio
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            // Set env var before app startup so JWT_SECRET check passes
+            Environment.SetEnvironmentVariable("JWT_SECRET", "test-jwt-secret-for-unit-tests-only-32chars");
             builder.ConfigureAppConfiguration((_, config) =>
             {
+                var dbUrl = Environment.GetEnvironmentVariable("TEST_DATABASE_URL")
+                    ?? "Host=localhost;Port=5432;Database=bndradio_test;Username=bndradio;Password=bndradio";
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["ConnectionStrings:DefaultConnection"] =
-                        Environment.GetEnvironmentVariable("TEST_DATABASE_URL")
-                        ?? "Host=localhost;Port=5432;Database=bndradio_test;Username=bndradio;Password=bndradio"
+                    ["ConnectionStrings:DefaultConnection"] = dbUrl,
+                    ["Admin:JwtSecret"] = "test-jwt-secret-for-unit-tests-only-32chars",
                 });
+            });
+            builder.ConfigureServices(services =>
+            {
+                // Replace IAmazonS3 with in-memory fake so tests don't need a real MinIO
+                var s3Descriptor = services.SingleOrDefault(d => d.ServiceType == typeof(Amazon.S3.IAmazonS3));
+                if (s3Descriptor != null) services.Remove(s3Descriptor);
+                services.AddSingleton<Amazon.S3.IAmazonS3, FakeS3>();
+
+                // If no real DB is available, replace ISongRepository with a no-op stub
+                // so the app can start without hanging on connection attempts
+                if (Environment.GetEnvironmentVariable("TEST_DATABASE_URL") == null)
+                {
+                    var repoDescriptor = services.SingleOrDefault(d => d.ServiceType == typeof(BndRadio.Interfaces.ISongRepository));
+                    if (repoDescriptor != null) services.Remove(repoDescriptor);
+                    services.AddSingleton<BndRadio.Interfaces.ISongRepository, NoOpSongRepository>();
+                }
             });
         }
     }
