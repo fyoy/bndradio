@@ -2,7 +2,7 @@
 
 dockerComposeFile="docker-compose.yaml"
 
-secretAdminAuth=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Admin%20auth )
+secretAdminAuth=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Admin%2520auth )
 
 ADMIN_LOGIN=$(echo ${ADMIN_LOGIN} | jq -r '.data.data.ADMIN_LOGIN')
 ADMIN_PASSWORD=$(echo ${ADMIN_PASSWORD} | jq -r '.data.data.ADMIN_PASSWORD')
