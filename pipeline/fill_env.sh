@@ -4,9 +4,9 @@ dockerComposeFile="docker-compose.yml"
 
 secretAdminAuth=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Admin%2520auth )
 
-ADMIN_LOGIN=$(echo ${ADMIN_LOGIN} | jq -r '.data.data.ADMIN_LOGIN')
-ADMIN_PASSWORD=$(echo ${ADMIN_PASSWORD} | jq -r '.data.data.ADMIN_PASSWORD')
-JWT_SECRET=$(echo ${JWT_SECRET} | jq -r '.data.data.JWT_SECRET')
+ADMIN_LOGIN=$(echo ${secretAdminAuth} | jq -r '.data.data.ADMIN_LOGIN')
+ADMIN_PASSWORD=$(echo ${secretAdminAuth} | jq -r '.data.data.ADMIN_PASSWORD')
+JWT_SECRET=$(echo ${secretAdminAuth} | jq -r '.data.data.JWT_SECRET')
 
 if [[ "${ADMIN_LOGIN}" == null || "${ADMIN_PASSWORD}" == null || "${JWT_SECRET}" == null ]]
 then
@@ -20,12 +20,12 @@ fi
 
 secretMinIO=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/MinIO )
 
-MINIO_ROOT_USER=$(echo ${MINIO_ROOT_USER} | jq -r '.data.data.MINIO_ROOT_USER')
-MINIO_ROOT_PASSWORD=$(echo ${MINIO_ROOT_PASSWORD} | jq -r '.data.data.MINIO_ROOT_PASSWORD')
-MINIO_ENDPOINT=$(echo ${MINIO_ENDPOINT} | jq -r '.data.data.MINIO_ENDPOINT')
-MINIO_ACCESS_KEY=$(echo ${MINIO_ACCESS_KEY} | jq -r '.data.data.MINIO_ACCESS_KEY')
-MINIO_SECRET_KEY=$(echo ${MINIO_SECRET_KEY} | jq -r '.data.data.MINIO_SECRET_KEY')
-MINIO_BUCKET_NAME=$(echo ${MINIO_BUCKET_NAME} | jq -r '.data.data.MINIO_BUCKET_NAME')
+MINIO_ROOT_USER=$(echo ${secretMinIO} | jq -r '.data.data.MINIO_ROOT_USER')
+MINIO_ROOT_PASSWORD=$(echo ${secretMinIO} | jq -r '.data.data.MINIO_ROOT_PASSWORD')
+MINIO_ENDPOINT=$(echo ${secretMinIO} | jq -r '.data.data.MINIO_ENDPOINT')
+MINIO_ACCESS_KEY=$(echo ${secretMinIO} | jq -r '.data.data.MINIO_ACCESS_KEY')
+MINIO_SECRET_KEY=$(echo ${secretMinIO} | jq -r '.data.data.MINIO_SECRET_KEY')
+MINIO_BUCKET_NAME=$(echo ${secretMinIO} | jq -r '.data.data.MINIO_BUCKET_NAME')
 
 if [[ "${MINIO_ROOT_USER}" == null || "${MINIO_ROOT_PASSWORD}" == null || "${MINIO_ENDPOINT}" == null || "${MINIO_ACCESS_KEY}" == null || "${MINIO_SECRET_KEY}" == null || "${MINIO_BUCKET_NAME}" == null ]]
 then
@@ -42,24 +42,24 @@ fi
 
 secretFrontend=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Frontend )
 
-FRONTEND_API_KEY=$(echo ${FRONTEND_API_KEY} | jq -r '.data.data.FRONTEND_API_KEY')
+FRONTEND_PORT=$(echo ${secretFrontend} | jq -r '.data.data.FRONTEND_PORT')
 
-if [[ "${FRONTEND_API_KEY}" == null ]]
+if [[ "${FRONTEND_PORT}" == null ]]
 then
-        echo "FRONTEND: API_KEY is empty, check vault status or secret path"
+        echo "FRONTEND: PORT is empty, check vault status or secret path"
         exit 1
 else
-        sed -i "s%${FRONTEND_API_KEY}%${FRONTEND_API_KEY}%g" ${dockerComposeFile}
+        sed -i "s%${FRONTEND_PORT}%${FRONTEND_PORT}%g" ${dockerComposeFile}
 fi
 
 secretBackend=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Backend )
 
-ASPNETCORE_URLS=$(echo ${ASPNETCORE_URLS} | jq -r '.data.data.ASPNETCORE_URLS')
-CORS_ORIGINS=$(echo ${CORS_ORIGINS} | jq -r '.data.data.CORS_ORIGINS')
+ASPNETCORE_URLS=$(echo ${secretBackend} | jq -r '.data.data.ASPNETCORE_URLS')
+CORS_ORIGINS=$(echo ${secretBackend} | jq -r '.data.data.CORS_ORIGINS')
 
-if [[ "${BACKEND_API_KEY}" == null ]]
+if [[ "${ASPNETCORE_URLS}" == null || "${CORS_ORIGINS}" == null ]]
 then
-        echo "BACKEND: API_KEY is empty, check vault status or secret path"
+        echo "BACKEND: ASPNETCORE_URLS or CORS_ORIGINS is empty, check vault status or secret path"
         exit 1
 else
         sed -i "s%${ASPNETCORE_URLS}%${ASPNETCORE_URLS}%g" ${dockerComposeFile}
@@ -69,9 +69,9 @@ fi
 
 secretPostgreSQL=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/PostgreSQL )
 
-POSTGRES_USER=$(echo ${POSTGRES_USER} | jq -r '.data.data.POSTGRES_USER')
-POSTGRES_PASSWORD=$(echo ${POSTGRES_PASSWORD} | jq -r '.data.data.POSTGRES_PASSWORD')
-POSTGRES_DB=$(echo ${POSTGRES_DB} | jq -r '.data.data.POSTGRES_DB')
+POSTGRES_USER=$(echo ${secretPostgreSQL} | jq -r '.data.data.POSTGRES_USER')
+POSTGRES_PASSWORD=$(echo ${secretPostgreSQL} | jq -r '.data.data.POSTGRES_PASSWORD')
+POSTGRES_DB=$(echo ${secretPostgreSQL} | jq -r '.data.data.POSTGRES_DB')
 
 if [[ "${POSTGRES_USER}" == null || "${POSTGRES_PASSWORD}" == null || "${POSTGRES_DB}" == null ]]
 then
