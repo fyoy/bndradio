@@ -1,8 +1,8 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY bndradio-backend.csproj .
+COPY /bndradio-backend/bndradio-backend.csproj .
 RUN dotnet restore
-COPY . .
+COPY ./bndradio-backend .
 RUN dotnet publish -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-dockerComposeFile="docker-compose.yaml"
+dockerComposeFile="docker-compose.yml"
 
 secretAdminAuth=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Admin%2520auth )
 

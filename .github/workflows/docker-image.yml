@@ -12,25 +12,24 @@ jobs:
       - name: Clear prev data
         run: |
           mkdir -p ${dockerComposePath}/files
-          if [[ -e "${dockerComposePath}/docker-compose.yaml" ]]; then
-              docker compose -f ${dockerComposePath}/docker-compose.yaml down
-              rm -f ${dockerComposePath}/docker-compose.yaml.old
-              mv ${dockerComposePath}/docker-compose.yaml ${dockerComposePath}/docker-compose.yaml.old
+          if [[ -e "${dockerComposePath}/docker-compose.yml" ]]; then
+              docker compose -f ${dockerComposePath}/docker-compose.yml down
+              rm -f ${dockerComposePath}/docker-compose.yml.old
+              mv ${dockerComposePath}/docker-compose.yml ${dockerComposePath}/docker-compose.yml.old
           fi
         env:
           dockerComposePath: ${{ secrets.dockerComposePath }}
-      - name: build backdend
+      - name: build backend
         run: |
-          docker compose build backend frontend
-        env:
-          VaultToken: ${{ secrets.VaultToken }}
-          baseURL: ${{ secrets.baseURL }}
-          dockerComposePath: ${{ secrets.dockerComposePath }}
+          docker build -t bndradio_backend:latest -f bndradio-backend/Dockerfile .
+      - name: build frontend
+        run: |
+          docker build -t bndradio_frontend:latest -f bndradio-frontend/Dockerfile .
       - name: Deploy
         run: |
           chmod +x pipeline/fill_env.sh && /bin/bash pipeline/fill_env.sh
-          cp docker-compose.yaml ${dockerComposePath}/docker-compose.yaml
-          docker compose -f "${dockerComposePath}/docker-compose.yaml" up -d
+          cp docker-compose.yml ${dockerComposePath}/docker-compose.yml
+          docker compose -f "${dockerComposePath}/docker-compose.yml" up -d
         env:
           VaultToken: ${{ secrets.VaultToken }}
           baseURL: ${{ secrets.baseURL }}
