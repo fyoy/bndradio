@@ -8,7 +8,7 @@ ADMIN_LOGIN=$(echo ${ADMIN_LOGIN} | jq -r '.data.data.ADMIN_LOGIN')
 ADMIN_PASSWORD=$(echo ${ADMIN_PASSWORD} | jq -r '.data.data.ADMIN_PASSWORD')
 JWT_SECRET=$(echo ${JWT_SECRET} | jq -r '.data.data.JWT_SECRET')
 
-if [[ "${ADMIN_LOGIN}" == null || "${ADMIN_PASSWORD}" == null || "${JWT_SECRET}" == null]]
+if [[ "${ADMIN_LOGIN}" == null || "${ADMIN_PASSWORD}" == null || "${JWT_SECRET}" == null ]]
 then
         echo "ADMIN: LOGIN/PASSWORD/JWT_SECRET is empty, check vault status or secret path"
         exit 1

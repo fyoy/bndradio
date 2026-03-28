@@ -17,11 +17,14 @@ jobs:
               rm -f ${dockerComposePath}/docker-compose.yaml.old
               mv ${dockerComposePath}/docker-compose.yaml ${dockerComposePath}/docker-compose.yaml.old
           fi
-          if [[ -e "${dockerComposePath}/files/next_run_time.txt" ]]; then
-              rm -f ${dockerComposePath}/files/next_run_time.txt.back
-              mv ${dockerComposePath}/files/next_run_time.txt ${dockerComposePath}/files/next_run_time.txt.back
-          fi
         env:
+          dockerComposePath: ${{ secrets.dockerComposePath }}
+      - name: build backdend
+        run: |
+          docker compose build backend frontend
+        env:
+          VaultToken: ${{ secrets.VaultToken }}
+          baseURL: ${{ secrets.baseURL }}
           dockerComposePath: ${{ secrets.dockerComposePath }}
       - name: Deploy
         run: |
