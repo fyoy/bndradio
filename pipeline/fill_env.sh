@@ -13,9 +13,9 @@ then
         echo "ADMIN: LOGIN/PASSWORD/JWT_SECRET is empty, check vault status or secret path"
         exit 1
 else
-        sed -i "s%${ADMIN_LOGIN}%${ADMIN_LOGIN}%g" ${dockerComposeFile}
-        sed -i "s%${ADMIN_PASSWORD}%${ADMIN_PASSWORD}%g" ${dockerComposeFile}
-        sed -i "s%${JWT_SECRET}%${JWT_SECRET}%g" ${dockerComposeFile}
+        sed -i "s%\${ADMIN_LOGIN}%${ADMIN_LOGIN}%g" ${dockerComposeFile}
+        sed -i "s%\${ADMIN_PASSWORD}%${ADMIN_PASSWORD}%g" ${dockerComposeFile}
+        sed -i "s%\${JWT_SECRET}%${JWT_SECRET}%g" ${dockerComposeFile}
 fi
 
 secretMinIO=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/MinIO )
@@ -32,12 +32,12 @@ then
         echo "MINIO: ROOT_USER/ROOT_PASSWORD/ENDPOINT/ACCESS_KEY/SECRET_KEY/BUCKET_NAME is empty, check vault status or secret path"
         exit 1
 else
-        sed -i "s%${MINIO_ROOT_USER}%${MINIO_ROOT_USER}%g" ${dockerComposeFile}
-        sed -i "s%${MINIO_ROOT_PASSWORD}%${MINIO_ROOT_PASSWORD}%g" ${dockerComposeFile}
-        sed -i "s%${MINIO_ENDPOINT}%${MINIO_ENDPOINT}%g" ${dockerComposeFile}
-        sed -i "s%${MINIO_ACCESS_KEY}%${MINIO_ACCESS_KEY}%g" ${dockerComposeFile}
-        sed -i "s%${MINIO_SECRET_KEY}%${MINIO_SECRET_KEY}%g" ${dockerComposeFile}
-        sed -i "s%${MINIO_BUCKET_NAME}%${MINIO_BUCKET_NAME}%g" ${dockerComposeFile}
+        sed -i "s%\${MINIO_ROOT_USER}%${MINIO_ROOT_USER}%g" ${dockerComposeFile}
+        sed -i "s%\${MINIO_ROOT_PASSWORD}%${MINIO_ROOT_PASSWORD}%g" ${dockerComposeFile}
+        sed -i "s%\${MINIO_ENDPOINT}%${MINIO_ENDPOINT}%g" ${dockerComposeFile}
+        sed -i "s%\${MINIO_ACCESS_KEY}%${MINIO_ACCESS_KEY}%g" ${dockerComposeFile}
+        sed -i "s%\${MINIO_SECRET_KEY}%${MINIO_SECRET_KEY}%g" ${dockerComposeFile}
+        sed -i "s%\${MINIO_BUCKET_NAME}%${MINIO_BUCKET_NAME}%g" ${dockerComposeFile}
 fi
 
 secretFrontend=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Frontend )
@@ -49,7 +49,7 @@ then
         echo "FRONTEND: PORT is empty, check vault status or secret path"
         exit 1
 else
-        sed -i "s%${FRONTEND_PORT}%${FRONTEND_PORT}%g" ${dockerComposeFile}
+        sed -i "s%\${FRONTEND_PORT}%${FRONTEND_PORT}%g" ${dockerComposeFile}
 fi
 
 secretBackend=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/Backend )
@@ -62,9 +62,8 @@ then
         echo "BACKEND: ASPNETCORE_URLS or CORS_ORIGINS is empty, check vault status or secret path"
         exit 1
 else
-        sed -i "s%${ASPNETCORE_URLS}%${ASPNETCORE_URLS}%g" ${dockerComposeFile}
-        sed -i "s%${CORS_ORIGINS}%${CORS_ORIGINS}%g" ${dockerComposeFile}
-
+        sed -i "s%\${ASPNETCORE_URLS}%${ASPNETCORE_URLS}%g" ${dockerComposeFile}
+        sed -i "s%\${CORS_ORIGINS}%${CORS_ORIGINS}%g" ${dockerComposeFile}
 fi
 
 secretPostgreSQL=$( curl -s -H "X-Vault-Token: ${VaultToken}" ${baseURL}/PostgreSQL )
@@ -78,7 +77,9 @@ then
         echo "POSTGRES: USER/PASSWORD/DB is empty, check vault status or secret path"
         exit 1
 else
-        sed -i "s%${POSTGRES_USER}%${POSTGRES_USER}%g" ${dockerComposeFile}
-        sed -i "s%${POSTGRES_PASSWORD}%${POSTGRES_PASSWORD}%g" ${dockerComposeFile}
-        sed -i "s%${POSTGRES_DB}%${POSTGRES_DB}%g" ${dockerComposeFile}
+        sed -i "s%\${POSTGRES_USER}%${POSTGRES_USER}%g" ${dockerComposeFile}
+        sed -i "s%\${POSTGRES_PASSWORD}%${POSTGRES_PASSWORD}%g" ${dockerComposeFile}
+        sed -i "s%\${POSTGRES_DB}%${POSTGRES_DB}%g" ${dockerComposeFile}
 fi
+
+echo "Docker Compose file updated successfully"
