@@ -27,7 +27,7 @@ jobs:
           docker build -t bndradio_frontend:latest -f bndradio-frontend/Dockerfile .
       - name: Deploy
         run: |
-          chmod +x pipeline/fill_env.sh && /bin/bash pipeline/fill_env.sh
+          chmod +x pipeline/fill_env.sh && source pipeline/fill_env.sh
           cp docker-compose.yml ${dockerComposePath}/docker-compose.yml
           docker compose -f "${dockerComposePath}/docker-compose.yml" up -d
         env:
