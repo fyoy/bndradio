@@ -75,7 +75,7 @@ POSTGRES_DB=$(echo ${secretPostgreSQL} | jq -r '.data.data.POSTGRES_DB')
 
 if [[ "${POSTGRES_USER}" == null || "${POSTGRES_PASSWORD}" == null || "${POSTGRES_DB}" == null ]]
 then
-        echo "ADMIN: LOGIN/PASSWORD/JWT_SECRET is empty, check vault status or secret path"
+        echo "POSTGRES: USER/PASSWORD/DB is empty, check vault status or secret path"
         exit 1
 else
         sed -i "s%${POSTGRES_USER}%${POSTGRES_USER}%g" ${dockerComposeFile}
