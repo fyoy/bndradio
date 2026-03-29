@@ -8,7 +8,7 @@ var config = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
-var endpoint   = config["MINIO_ENDPOINT"]   ?? "localhost:9000";
+var endpoint   = config["MINIO_ENDPOINT"]   ?? "localhost:23900";
 var accessKey  = config["MINIO_ACCESS_KEY"]  ?? "minioadmin";
 var secretKey  = config["MINIO_SECRET_KEY"]  ?? "minioadmin";
 var bucketName = config["MINIO_BUCKET_NAME"] ?? "audio";
