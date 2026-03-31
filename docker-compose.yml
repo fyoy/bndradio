@@ -2,9 +2,9 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: "${POSTGRES_USER}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-      POSTGRES_DB: "${POSTGRES_DB}"
+      POSTGRES_USER: "__POSTGRES_USER__"
+      POSTGRES_PASSWORD: "__POSTGRES_PASSWORD__"
+      POSTGRES_DB: "__POSTGRES_DB__"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -26,8 +26,8 @@ services:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      MINIO_ROOT_USER: "__MINIO_ROOT_USER__"
+      MINIO_ROOT_PASSWORD: "__MINIO_ROOT_PASSWORD__"
     ports:
       - "23900:9000"
       - "23901:9001"
@@ -40,21 +40,19 @@ services:
       retries: 10
 
   backend:
-    # build:
-    #   context: ./bndradio-backend
     image: bndradio_backend:latest
     environment:
-      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=__POSTGRES_DB__;Username=__POSTGRES_USER__;Password=__POSTGRES_PASSWORD__"
       ConnectionStrings__Redis: "redis:6379"
-      ASPNETCORE_URLS: "${ASPNETCORE_URLS}"
-      CORS_ORIGINS: "${CORS_ORIGINS}"
-      ADMIN_LOGIN: "${ADMIN_LOGIN}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
-      JWT_SECRET: "${JWT_SECRET}"
-      MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
-      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
-      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
-      MINIO_BUCKET_NAME: "${MINIO_BUCKET_NAME}"
+      ASPNETCORE_URLS: "__ASPNETCORE_URLS__"
+      CORS_ORIGINS: "__CORS_ORIGINS__"
+      ADMIN_LOGIN: "__ADMIN_LOGIN__"
+      ADMIN_PASSWORD: "__ADMIN_PASSWORD__"
+      JWT_SECRET: "__JWT_SECRET__"
+      MINIO_ENDPOINT: "__MINIO_ENDPOINT__"
+      MINIO_ACCESS_KEY: "__MINIO_ACCESS_KEY__"
+      MINIO_SECRET_KEY: "__MINIO_SECRET_KEY__"
+      MINIO_BUCKET_NAME: "__MINIO_BUCKET_NAME__"
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,11 +69,9 @@ services:
     stop_grace_period: 5s
 
   frontend:
-    # build:
-    #   context: ./bndradio-frontend
     image: bndradio_frontend:latest
     ports:
-      - "${FRONTEND_PORT}:80"
+      - "__FRONTEND_PORT__:80"
     depends_on:
       - backend
     stop_grace_period: 5s
