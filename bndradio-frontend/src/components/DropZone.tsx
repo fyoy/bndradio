@@ -1,3 +1,6 @@
+// Full-page drag-and-drop overlay for batch audio uploads (admin only).
+// Listens to document-level drag events and shows an overlay when files are dragged over the window.
+// Uploads files sequentially and shows a toast with the result summary.
 import { useState, useEffect, useCallback, useRef } from 'react'
 
 interface UploadResult {

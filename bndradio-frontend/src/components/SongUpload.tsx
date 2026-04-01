@@ -1,3 +1,6 @@
+// Modal upload form with two modes:
+// "single" — pick one file, set a title, upload with XHR progress bar.
+// "bulk"   — pick a folder or drop multiple files, uploads sequentially with a results list.
 import React, { useState, useRef, useCallback } from 'react'
 
 interface Props {

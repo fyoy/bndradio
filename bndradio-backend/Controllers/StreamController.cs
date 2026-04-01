@@ -1,3 +1,6 @@
+// GET /stream — opens a persistent HTTP connection and streams raw MP3 bytes.
+// Each listener gets a dedicated channel reader from StreamServer.
+// Response headers disable buffering so chunks arrive in real time.
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using BndRadio.Interfaces;
@@ -6,14 +9,9 @@ namespace BndRadio.Controllers;
 
 [ApiController]
 [Route("")]
-public class StreamController : ControllerBase
+public class StreamController(IStreamServer streamServer) : ControllerBase
 {
-    private readonly IStreamServer _streamServer;
-
-    public StreamController(IStreamServer streamServer)
-    {
-        _streamServer = streamServer;
-    }
+    private readonly IStreamServer _streamServer = streamServer;
 
     [HttpGet("stream")]
     public async Task StreamAsync(CancellationToken ct)

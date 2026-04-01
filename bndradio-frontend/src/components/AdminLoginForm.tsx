@@ -1,3 +1,5 @@
+// Modal form for admin login. Calls onLogin with credentials,
+// shows a spinner while loading, and calls onSuccess on a valid response.
 import React, { useState } from 'react'
 
 interface Props {

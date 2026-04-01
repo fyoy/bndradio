@@ -3,8 +3,8 @@ services:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: "__MINIO_ROOT_USER__"
-      MINIO_ROOT_PASSWORD: "__MINIO_ROOT_PASSWORD__"
+      MINIO_ROOT_USER: "minioadmin"
+      MINIO_ROOT_PASSWORD: "minioadmin"
     ports:
       - "23900:9000"
       - "23901:9001"
@@ -13,27 +13,27 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 3s
-      timeout: 3s
+      timeout: 5s
       retries: 5
 
   backend:
     image: bndradio_backend:latest
     environment:
-      ASPNETCORE_URLS: "__ASPNETCORE_URLS__"
-      ADMIN_LOGIN: "__ADMIN_LOGIN__"
-      ADMIN_PASSWORD: "__ADMIN_PASSWORD__"
-      JWT_SECRET: "__JWT_SECRET__"
-      MINIO_ENDPOINT: "__MINIO_ENDPOINT__"
-      MINIO_ACCESS_KEY: "__MINIO_ACCESS_KEY__"
-      MINIO_SECRET_KEY: "__MINIO_SECRET_KEY__"
-      MINIO_BUCKET_NAME: "__MINIO_BUCKET_NAME__"
+      ASPNETCORE_URLS: "http://+:5000"
+      ADMIN_LOGIN: "admin"
+      ADMIN_PASSWORD: "mysecretpassword"
+      JWT_SECRET: "supersecretkey1234567890abcdefgh111111111111111111111111111111111111111111111"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin"
+      MINIO_BUCKET_NAME: "audio"
     depends_on:
       minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:5000/health || exit 1"]
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 5
       start_period: 15s
     stop_grace_period: 5s
@@ -41,7 +41,7 @@ services:
   frontend:
     image: bndradio_frontend:latest
     ports:
-      - "__FRONTEND_PORT__:80"
+      - "23000:80"
     depends_on:
       - backend
     stop_grace_period: 5s

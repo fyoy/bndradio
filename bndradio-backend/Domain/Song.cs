@@ -1,3 +1,4 @@
+// Domain model — immutable record representing a song in the catalogue.
 namespace BndRadio.Domain;
 
 public record Song(
@@ -5,5 +6,6 @@ public record Song(
     string Title,
     string Artist,
     int DurationMs,
-    int PlayCount = 0
+    int PlayCount = 0,
+    string? FileHash = null
 );

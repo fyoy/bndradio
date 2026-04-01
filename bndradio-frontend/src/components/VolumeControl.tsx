@@ -1,3 +1,5 @@
+// Volume slider that persists the value in localStorage.
+// Syncs the HTMLAudioElement volume on mount and on every change.
 import React, { useState, useEffect } from 'react'
 
 interface Props { audioRef: React.RefObject<HTMLAudioElement> }

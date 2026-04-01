@@ -4,15 +4,10 @@ using System.Text.Json;
 
 namespace BndRadio.Services;
 
-public class SseHub
+public class SseHub(ILogger<SseHub> logger)
 {
     private readonly ConcurrentDictionary<Guid, SseClient> _clients = new();
-    private readonly ILogger<SseHub> _logger;
-
-    public SseHub(ILogger<SseHub> logger)
-    {
-        _logger = logger;
-    }
+    private readonly ILogger<SseHub> _logger = logger;
 
     public int ClientCount => _clients.Count;
 
@@ -57,17 +52,11 @@ public class SseHub
     }
 }
 
-public class SseClient
+public class SseClient(HttpResponse response, CancellationToken ct)
 {
-    private readonly HttpResponse _response;
-    private readonly CancellationToken _ct;
+    private readonly HttpResponse _response = response;
+    private readonly CancellationToken _ct = ct;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-
-    public SseClient(HttpResponse response, CancellationToken ct)
-    {
-        _response = response;
-        _ct = ct;
-    }
 
     public async Task WriteAsync(byte[] data)
     {

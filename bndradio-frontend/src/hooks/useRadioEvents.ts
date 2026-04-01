@@ -1,3 +1,6 @@
+// Hook that opens a persistent SSE connection to /events and dispatches
+// incoming events (state, presence, reaction, skip_requests) to callbacks.
+// Automatically reconnects with exponential backoff on disconnect.
 import { useEffect, useRef, useCallback } from 'react'
 
 export interface RadioState {

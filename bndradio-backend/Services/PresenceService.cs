@@ -1,49 +1,52 @@
+// Tracks online listeners, their votes, and skip-permission state.
+// All state is in-memory (ConcurrentDictionary) — resets on restart.
+// Sessions are considered active if they pinged within the last 30 seconds.
 using System.Collections.Concurrent;
 
 namespace BndRadio.Services;
 
 public class PresenceService
 {
-    private const int TimeoutSeconds = 30;
-    public const int SkipThreshold = 3;
+    private const int TimeoutSeconds = 30;       // inactivity threshold for presence
 
-    private readonly ConcurrentDictionary<string, (DateTime LastSeen, string Username, string Color)> _sessions = new();
+    // sessionId → (lastSeen, username, color)
+    private readonly ConcurrentDictionary<string, (DateTime LastSeen, string Username)> _sessions = new();
+
+    // sessionId → voted songId (one vote per session)
     private readonly ConcurrentDictionary<string, Guid> _votes = new();
-    private readonly ConcurrentDictionary<string, Guid> _skipVotes = new();
-    private readonly ConcurrentDictionary<string, DateTime> _lastSkipTime = new();
-    // sessionIds granted skip permission by admin
-    private readonly ConcurrentDictionary<string, bool> _skipGranted = new();
-    // sessionIds that requested skip (username -> sessionId)
-    private readonly ConcurrentDictionary<string, string> _skipRequests = new(); // sessionId -> username
-    private Guid _currentSongId = Guid.Empty;
 
-    public void Ping(string sessionId, string? username = null, string? color = null)
+    // sessionIds that have been granted skip permission by an admin
+    private readonly ConcurrentDictionary<string, bool> _skipGranted = new();
+
+    // sessionId → username for pending skip requests (user asked admin to allow skip)
+    private readonly ConcurrentDictionary<string, string> _skipRequests = new();
+
+    private readonly Guid _currentSongId = Guid.Empty;
+
+    // Updates or creates a session entry with the current timestamp.
+    public void Ping(string sessionId, string? username = null)
     {
         _sessions.AddOrUpdate(
             sessionId,
-            _ => (DateTime.UtcNow, username ?? sessionId[..8], color ?? "#30d158"),
-            (_, old) => (DateTime.UtcNow, username ?? old.Username, color ?? old.Color));
+            _ => (DateTime.UtcNow, username ?? sessionId[..8]),
+            (_, old) => (DateTime.UtcNow, username ?? old.Username));
     }
 
+    // ── Announcements ────────────────────────────────────────────────────────
     private record AnnounceEntry(string Text, DateTime At);
     private readonly ConcurrentQueue<AnnounceEntry> _announces = new();
-    private DateTime _lastAnnounce = DateTime.MinValue;
 
+    // Stores a broadcast announcement (capped at 20 entries).
     public void Announce(string text)
     {
         _announces.Enqueue(new AnnounceEntry(text, DateTime.UtcNow));
-        _lastAnnounce = DateTime.UtcNow;
         while (_announces.Count > 20) _announces.TryDequeue(out _);
     }
 
-    public IReadOnlyList<string> GetAnnouncesSince(DateTime since)
-    {
-        return _announces
-            .Where(a => a.At > since)
-            .Select(a => a.Text)
-            .ToList();
-    }
+    public IReadOnlyList<string> GetAnnouncesSince(DateTime since) =>
+        _announces.Where(a => a.At > since).Select(a => a.Text).ToList();
 
+    // ── Active users ─────────────────────────────────────────────────────────
     public int GetActiveCount()
     {
         var cutoff = DateTime.UtcNow.AddSeconds(-TimeoutSeconds);
@@ -53,26 +56,25 @@ public class PresenceService
     public IReadOnlyList<string> GetActiveUsernames()
     {
         var cutoff = DateTime.UtcNow.AddSeconds(-TimeoutSeconds);
-        return _sessions
+        return [.. _sessions
             .Where(kv => kv.Value.LastSeen >= cutoff)
             .Select(kv => kv.Value.Username)
-            .OrderBy(n => n)
-            .ToList();
+            .OrderBy(n => n)];
     }
 
-    public IReadOnlyList<(string Username, string Color)> GetActiveUsers()
+    public IReadOnlyList<string> GetActiveUsers()
     {
         var cutoff = DateTime.UtcNow.AddSeconds(-TimeoutSeconds);
-        return _sessions
+        return [.. _sessions
             .Where(kv => kv.Value.LastSeen >= cutoff)
-            .Select(kv => (kv.Value.Username, kv.Value.Color))
-            .OrderBy(u => u.Username)
-            .ToList();
+            .Select(kv => kv.Value.Username)];
     }
 
+    // Returns the display name for a session, or null if the session is unknown.
     public string? GetUsername(string sessionId) =>
         _sessions.TryGetValue(sessionId, out var s) ? s.Username : null;
 
+    // ── Song votes ───────────────────────────────────────────────────────────
     public Guid? GetVote(string sessionId) =>
         _votes.TryGetValue(sessionId, out var id) ? id : null;
 
@@ -86,62 +88,27 @@ public class PresenceService
 
     public void ClearVote(string sessionId) => _votes.TryRemove(sessionId, out _);
 
-    public int CheckSkipCooldown(string sessionId) => 0; // cooldown removed
+    // ── Skip permission ──────────────────────────────────────────────────────
 
+    // Admin grants a specific session the right to skip once.
+    // Also removes any pending skip request from that session.
     public void GrantSkip(string sessionId)
     {
         _skipGranted[sessionId] = true;
         _skipRequests.TryRemove(sessionId, out _);
     }
 
+    // Atomically checks and removes the grant — returns true if the session had one.
     public bool ConsumeSkipGrant(string sessionId) => _skipGranted.TryRemove(sessionId, out _);
 
     public bool HasSkipGrant(string sessionId) => _skipGranted.ContainsKey(sessionId);
 
-    public void RequestSkip(string sessionId, string username)
-    {
+    // User requests permission to skip from the admin.
+    public void RequestSkip(string sessionId, string username) =>
         _skipRequests[sessionId] = username;
-    }
 
     public void CancelSkipRequest(string sessionId) => _skipRequests.TryRemove(sessionId, out _);
 
     public IReadOnlyList<(string SessionId, string Username)> GetSkipRequests() =>
         _skipRequests.Select(kv => (kv.Key, kv.Value)).ToList();
-
-    public (int VoteCount, bool Triggered) VoteSkip(string sessionId, Guid songId)
-    {
-        if (songId != _currentSongId)
-        {
-            _skipVotes.Clear();
-            _currentSongId = songId;
-        }
-
-        if (_skipVotes.TryGetValue(sessionId, out var existing) && existing == songId)
-        {
-            var currentCount = _skipVotes.Count(kv => kv.Value == songId);
-            return (currentCount, false);
-        }
-
-        _skipVotes[sessionId] = songId;
-        // _lastSkipTime removed
-
-        var count = _skipVotes.Count(kv => kv.Value == songId);
-        var triggered = count == SkipThreshold;
-        return (count, triggered);
-    }
-
-    public int GetSkipVoteCount(Guid songId)
-    {
-        if (songId != _currentSongId) return 0;
-        return _skipVotes.Count(kv => kv.Value == songId);
-    }
-
-    public bool HasVotedSkip(string sessionId, Guid songId) =>
-        _skipVotes.TryGetValue(sessionId, out var id) && id == songId;
-
-    public void ResetSkipVotes(Guid songId)
-    {
-        if (songId == _currentSongId)
-            _skipVotes.Clear();
-    }
 }

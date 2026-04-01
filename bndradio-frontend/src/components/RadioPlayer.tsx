@@ -1,10 +1,11 @@
+// Main application shell — owns all shared state and wires together every sub-component.
 import React, { useRef, useState, useEffect, useCallback } from 'react'
 import NowPlaying from './NowPlaying'
 import VolumeControl from './VolumeControl'
 import SongSuggestion from './SongSuggestion'
 import SongUpload from './SongUpload'
 import OceanBackground from './OceanBackground'
-import { getSessionId, getUsername, getUserColor, setUsername, setUserColor, COLORS } from '../session'
+import { getSessionId, getUsername, setUsername } from '../session'
 import DropZone from './DropZone'
 import { useRadioEvents } from '../hooks/useRadioEvents'
 import type { RadioState, PresenceState } from '../hooks/useRadioEvents'
@@ -39,27 +40,24 @@ export default function RadioPlayer() {
   const [skipGranted, setSkipGranted] = useState(false)
   const [skipRequested, setSkipRequested] = useState(false)
   const [skipRequests, setSkipRequests] = useState<{ sessionId: string; username: string }[]>([])
-  const [showColorPicker, setShowColorPicker] = useState(false)
-  const colorPickerRef = useRef<HTMLDivElement>(null)
-  const colorIconRef = useRef<HTMLSpanElement>(null)
-  const [userColor, setUserColorState] = useState(getUserColor)
   const [trackFlash, setTrackFlash] = useState(false)
   const [skipShake, setSkipShake] = useState(false)
-  const [timeOverride, setTimeOverride] = useState<'day' | 'night' | undefined>(undefined)
+  const [timeOverride, setTimeOverride] = useState<'day' | 'night' | undefined>(() => {
+    const stored = localStorage.getItem('timeOverride')
+    return stored === 'day' || stored === 'night' ? stored : undefined
+  })
   const intentionalStopRef = useRef(false)
   const prevTrackIdRef = useRef<string>('')
 
   const sessionId = getSessionId()
   const [username, setUsernameState] = useState(getUsername)
   const { isAdmin, login, logout, getAuthHeader } = useAdminAuth()
-  const handleLogout = () => {
-    logout()
-    setLoginOpen(false)
-  }
+
   const [editingName, setEditingName] = useState(false)
   const [nameInput, setNameInput] = useState('')
   const nameInputRef = useRef<HTMLInputElement>(null)
-const startEditName = () => {
+
+  const startEditName = () => {
     setNameInput(username)
     setEditingName(true)
     setTimeout(() => nameInputRef.current?.select(), 0)
@@ -70,13 +68,11 @@ const startEditName = () => {
     const saved = setUsername(nameInput)
     setUsernameState(saved)
     setEditingName(false)
-    setTimeout(() => {
-      fetch('/presence/announce', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: saved }),
-      }).catch(() => {})
-    }, 0)
+    fetch('/presence/announce', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: saved }),
+    }).catch(() => {})
   }
 
   const lastSyncRef = useRef<{ elapsedMs: number; at: number }>({ elapsedMs: 0, at: Date.now() })
@@ -89,6 +85,7 @@ const startEditName = () => {
     return () => window.removeEventListener('keydown', onKey)
   }, [uploadOpen])
 
+  // Initial state fetch on mount
   useEffect(() => {
     fetch('/queue/state', { headers: { 'X-Session-Id': sessionId } })
       .then(r => r.ok ? r.json() : null)
@@ -109,12 +106,12 @@ const startEditName = () => {
       .catch(() => {})
   }, [])
 
-  const pingPresence = useCallback(async (name: string, color: string) => {
+  const pingPresence = useCallback(async (name: string) => {
     try {
       const res = await fetch('/presence/ping', {
         method: 'POST',
         headers: { 'X-Session-Id': sessionId, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: name, color }),
+        body: JSON.stringify({ username: name }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -125,24 +122,12 @@ const startEditName = () => {
   }, [sessionId])
 
   useEffect(() => {
-    pingPresence(username, userColor)
-    const id = setInterval(() => pingPresence(username, userColor), 20_000)
+    pingPresence(username)
+    const id = setInterval(() => pingPresence(username), 20_000)
     return () => clearInterval(id)
-  }, [sessionId, username, userColor, pingPresence])
+  }, [sessionId, username, pingPresence])
 
-  useEffect(() => {
-    if (!showColorPicker) return
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node
-      const inPicker = colorPickerRef.current?.contains(t)
-      const inIcon   = colorIconRef.current?.contains(t)
-      if (!inPicker && !inIcon) setShowColorPicker(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [showColorPicker])
-
-  // Poll for skip grant when requested and not yet granted
+  // Poll for skip grant
   useEffect(() => {
     if (!skipRequested || skipGranted || isAdmin) return
     const id = setInterval(async () => {
@@ -150,10 +135,7 @@ const startEditName = () => {
         const res = await fetch('/queue/skip/status', { headers: { 'X-Session-Id': sessionId } })
         if (res.ok) {
           const data = await res.json()
-          if (data.hasGrant) {
-            setSkipGranted(true)
-            setSkipRequested(false)
-          }
+          if (data.hasGrant) { setSkipGranted(true); setSkipRequested(false) }
         }
       } catch { /* ignore */ }
     }, 2000)
@@ -164,21 +146,9 @@ const startEditName = () => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
-      if (e.code === 'Space') {
-        e.preventDefault()
-        if (playing) stopPlayback()
-        else startPlayback()
-      }
-      if (e.code === 'ArrowUp') {
-        e.preventDefault()
-        const audio = audioRef.current
-        if (audio) audio.volume = Math.min(1, audio.volume + 0.1)
-      }
-      if (e.code === 'ArrowDown') {
-        e.preventDefault()
-        const audio = audioRef.current
-        if (audio) audio.volume = Math.max(0, audio.volume - 0.1)
-      }
+      if (e.code === 'Space') { e.preventDefault(); playing ? stopPlayback() : startPlayback() }
+      if (e.code === 'ArrowUp') { e.preventDefault(); const a = audioRef.current; if (a) a.volume = Math.min(1, a.volume + 0.1) }
+      if (e.code === 'ArrowDown') { e.preventDefault(); const a = audioRef.current; if (a) a.volume = Math.max(0, a.volume - 0.1) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -187,32 +157,15 @@ const startEditName = () => {
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
     if (queueState?.currentTitle) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: queueState.currentTitle,
-        artist: 'bndradio',
-        album: 'Live Stream',
-      })
+      navigator.mediaSession.metadata = new MediaMetadata({ title: queueState.currentTitle, artist: 'bndradio', album: 'Live Stream' })
     }
     navigator.mediaSession.setActionHandler('play', () => startPlayback())
     navigator.mediaSession.setActionHandler('pause', () => stopPlayback())
     navigator.mediaSession.setActionHandler('stop', () => stopPlayback())
   }, [queueState?.currentTitle, playing])
 
-  const prevNotifTitleRef = useRef<string>('')
   useEffect(() => {
-    if (!queueState?.currentTitle) return
-    if (queueState.currentTitle === prevNotifTitleRef.current) return
-    prevNotifTitleRef.current = queueState.currentTitle
-    if (!playing) return
-    if (Notification.permission === 'granted') {
-      new Notification('bndradio', { body: queueState.currentTitle, silent: true })
-    }
-  }, [queueState?.currentTitle, playing])
-
-  useEffect(() => {
-    if (Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {})
-    }
+    if (Notification.permission === 'default') Notification.requestPermission().catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -222,18 +175,14 @@ const startEditName = () => {
     favicon.href = `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='28' font-size='28'>${icon}</text></svg>`
   }, [playing])
 
-const skipVotesRef = useRef(skipVotes)
+  const skipVotesRef = useRef(skipVotes)
   skipVotesRef.current = skipVotes
 
   useRadioEvents({
     sessionId,
     onState: useCallback((s: RadioState) => {
-      const prevSkipVotes = skipVotesRef.current
       setSkipVotes(s.skipVotes)
       setMySkipVote(s.mySkipVote)
-
-      if (s.skipVotes > prevSkipVotes) {
-      }
 
       const hash = `${s.currentId}|${s.nextId}`
       if (hash !== lastStateHashRef.current) {
@@ -289,11 +238,9 @@ const skipVotesRef = useRef(skipVotes)
     try {
       await audio.play()
       setPlaying(true)
-      
     } catch (e) {
       console.error('Playback failed:', e)
       setPlaying(false)
-      
       setBuffering(false)
     }
   }, [])
@@ -305,7 +252,6 @@ const skipVotesRef = useRef(skipVotes)
     audio.pause()
     audio.src = ''
     setPlaying(false)
-    
     setBuffering(false)
   }, [])
 
@@ -313,12 +259,8 @@ const skipVotesRef = useRef(skipVotes)
     const audio = audioRef.current
     if (!audio) return
     const onError = () => {
-      
       setBuffering(false)
-      if (intentionalStopRef.current) {
-        intentionalStopRef.current = false
-        return
-      }
+      if (intentionalStopRef.current) { intentionalStopRef.current = false; return }
       if (audioRef.current && audioRef.current.src) {
         setTimeout(() => {
           if (!audioRef.current || intentionalStopRef.current) return
@@ -332,7 +274,7 @@ const skipVotesRef = useRef(skipVotes)
     }
     const onPlaying = () => { setPlaying(true); setBuffering(false) }
     const onWaiting = () => { if (playing) setBuffering(true) }
-    const onCanPlay = () => 
+    const onCanPlay = () => {}
     audio.addEventListener('error',   onError)
     audio.addEventListener('playing', onPlaying)
     audio.addEventListener('waiting', onWaiting)
@@ -347,17 +289,12 @@ const skipVotesRef = useRef(skipVotes)
 
   const valid = queueState && queueState.currentId !== '00000000-0000-0000-0000-000000000000'
 
+
   return (
-    <div
-      className="app-layout"
-      style={{ '--accent': userColor } as React.CSSProperties}
-    >
+    <div className="app-layout">
       <OceanBackground timeOverride={timeOverride} />
       <DropZone onUploaded={() => setCatalogKey(k => k + 1)} disabled={uploadOpen} isAdmin={isAdmin} getAuthHeader={getAuthHeader} />
       <audio ref={audioRef} preload="none" style={{ display: 'none' }} />
-
-      <div className="emoji-float-layer" aria-hidden="true">
-      </div>
 
       <main className="player-stage">
         <div className={`stage-row${playing ? ' stage-row--playing' : ''}${trackFlash ? ' stage-row--flash' : ''}${skipShake ? ' stage-row--shake' : ''}`}>
@@ -371,32 +308,10 @@ const skipVotesRef = useRef(skipVotes)
                 <span className="user-badge">
                   <span className="user-badge-icon-wrap">
                     {isAdmin && <span className="admin-crown">👑</span>}
-                    <span
-                      className="user-badge-icon"
-                      style={{ background: userColor }}
-                      onClick={() => setShowColorPicker(p => !p)}
-                      title="Выбрать цвет"
-                    >
+                    <span className="user-badge-icon">
                       {username[0].toUpperCase()}
                     </span>
                   </span>
-                  {showColorPicker && (
-                    <div className="color-picker" ref={colorPickerRef}>
-                      {COLORS.map(c => (
-                        <button
-                          key={c}
-                          className={`color-swatch${c === userColor ? ' active' : ''}`}
-                          style={{ background: c }}
-                          onClick={() => {
-                            setUserColor(c)
-                            setUserColorState(c)
-                            setShowColorPicker(false)
-                            pingPresence(username, c)
-                          }}
-                        />
-                      ))}
-                    </div>
-                  )}
                   {editingName ? (
                     <input
                       ref={nameInputRef}
@@ -430,7 +345,6 @@ const skipVotesRef = useRef(skipVotes)
                       <div className="users-tooltip">
                         {onlineUsers.map(u => (
                           <span key={u.username} className={`users-tooltip-item${u.username === username ? ' users-tooltip-item--me' : ''}`}>
-                            <span className="users-panel-dot" style={{ background: u.color }} />
                             {u.username}
                           </span>
                         ))}
@@ -438,18 +352,31 @@ const skipVotesRef = useRef(skipVotes)
                     )}
                   </div>
                 )}
+
                 <button
                   className="admin-login-btn"
-                  onClick={() => setTimeOverride(t => t === undefined ? 'day' : t === 'day' ? 'night' : undefined)}
-                  title={timeOverride === 'day' ? 'День → нажми для ночи' : timeOverride === 'night' ? 'Ночь → нажми для авто' : 'Авто (реальное время) → нажми для дня'}
+                  onClick={() => {
+                    const newValue = (t: 'day' | 'night' | undefined) => t === undefined ? 'day' : t === 'day' ? 'night' : undefined
+                    setTimeOverride(prev => {
+                      const next = newValue(prev)
+                      if (next === undefined) {
+                        localStorage.removeItem('timeOverride')
+                      } else {
+                        localStorage.setItem('timeOverride', next)
+                      }
+                      return next
+                    })
+                  }}
+                  title={timeOverride === 'day' ? 'День → ночь' : timeOverride === 'night' ? 'Ночь → авто' : 'Авто → день'}
                   aria-label="Переключить время суток"
                 >
                   {timeOverride === 'night' ? '🌙' : timeOverride === 'day' ? '☀️' : '🕐'}
                 </button>
+
                 <button
                   className={`admin-login-btn${isAdmin ? ' admin-login-btn--active' : ''}`}
-                  onClick={isAdmin ? handleLogout : () => setLoginOpen(l => !l)}
-                  title={isAdmin ? 'Выйти из режима администратора' : 'Войти как администратор'}
+                  onClick={isAdmin ? () => { logout(); setLoginOpen(false) } : () => setLoginOpen(l => !l)}
+                  title={isAdmin ? 'Выйти' : 'Войти как администратор'}
                   aria-label={isAdmin ? 'Выйти' : 'Войти как администратор'}
                 >
                   {isAdmin ? (
@@ -468,16 +395,14 @@ const skipVotesRef = useRef(skipVotes)
 
               <NowPlaying title={valid ? queueState.currentTitle : null} onDoubleClick={undefined} />
 
+              <div className="progress-bar-wrap">
+                <div className="progress-bar-track">
+                  <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
+                </div>
+              </div>
+
               <div className="player-controls">
                 <div className="play-btn-wrap">
-                  <svg className="play-ring" viewBox="0 0 68 68" aria-hidden="true" style={{ opacity: playing ? 1 : 0, transition: 'opacity 0.3s ease' }}>
-                    <circle className="play-ring-track" cx="34" cy="34" r="29" />
-                    <circle
-                      className="play-ring-fill"
-                      cx="34" cy="34" r="29"
-                      style={{ strokeDashoffset: 182.2 - (182.2 * progress) / 100 }}
-                    />
-                  </svg>
                   <button
                     className={`play-btn${playing ? ' stop' : ''}${buffering ? ' buffering' : ''}${!valid && !playing ? ' play-btn--disabled' : ''}`}
                     onClick={playing ? stopPlayback : startPlayback}
@@ -495,64 +420,47 @@ const skipVotesRef = useRef(skipVotes)
                     </span>
                   </button>
                 </div>
+
                 <button
                   className={`skip-btn${mySkipVote ? ' skip-btn--voted' : ''}${skipGranted ? ' skip-btn--granted' : ''}${skipRequested ? ' skip-btn--requested' : ''}`}
                   disabled={mySkipVote || skipRequested}
                   onClick={async () => {
                     if (isAdmin) {
-                      // Admin: direct skip with JWT
                       const res = await fetch('/queue/skip', {
                         method: 'POST',
                         headers: { 'X-Session-Id': sessionId, ...getAuthHeader() },
                       })
                       if (res.ok) {
-                        const data = await res.json()
-                        setSkipVotes(data.votes)
                         setMySkipVote(true)
                         setSkipShake(true)
                         setTimeout(() => setSkipShake(false), 400)
-                        if (data.skipped && playing) {
+                        if (playing) {
                           const audio = audioRef.current
-                          if (!audio) return
-                          setTimeout(() => {
-                            audio.src = `${STREAM_URL}?t=${Date.now()}`
-                            audio.play().catch(() => {})
-                          }, 300)
+                          if (audio) setTimeout(() => { audio.src = `${STREAM_URL}?t=${Date.now()}`; audio.play().catch(() => {}) }, 300)
                         }
                       }
                     } else if (skipGranted) {
-                      // User with grant: execute skip
                       const res = await fetch('/queue/skip', {
                         method: 'POST',
                         headers: { 'X-Session-Id': sessionId },
                       })
                       if (res.ok) {
-                        const data = await res.json()
-                        setSkipVotes(data.votes)
                         setMySkipVote(true)
                         setSkipGranted(false)
                         setSkipShake(true)
                         setTimeout(() => setSkipShake(false), 400)
-                        if (data.skipped && playing) {
+                        if (playing) {
                           const audio = audioRef.current
-                          if (!audio) return
-                          setTimeout(() => {
-                            audio.src = `${STREAM_URL}?t=${Date.now()}`
-                            audio.play().catch(() => {})
-                          }, 300)
+                          if (audio) setTimeout(() => { audio.src = `${STREAM_URL}?t=${Date.now()}`; audio.play().catch(() => {}) }, 300)
                         }
                       }
                     } else {
-                      // User: request permission from admin
                       setSkipRequested(true)
-                      await fetch('/queue/skip/request', {
-                        method: 'POST',
-                        headers: { 'X-Session-Id': sessionId },
-                      })
+                      await fetch('/queue/skip/request', { method: 'POST', headers: { 'X-Session-Id': sessionId } })
                     }
                   }}
-                  aria-label={isAdmin ? 'Пропустить' : skipGranted ? 'Пропустить (разрешено)' : skipRequested ? 'Ожидание разрешения...' : 'Запросить пропуск'}
-                  title={isAdmin ? 'Пропустить трек' : skipGranted ? 'Нажмите чтобы пропустить' : skipRequested ? 'Ожидание разрешения от администратора...' : 'Запросить разрешение на пропуск у администратора'}
+                  aria-label={isAdmin ? 'Пропустить' : skipGranted ? 'Пропустить' : skipRequested ? 'Ожидание...' : 'Запросить пропуск'}
+                  title={isAdmin ? 'Пропустить трек' : skipGranted ? 'Нажмите чтобы пропустить' : skipRequested ? 'Ожидание разрешения...' : 'Запросить разрешение у администратора'}
                 >
                   <svg viewBox="0 0 24 24" fill="currentColor">
                     <path d="M6 18l8.5-6L6 6v12zm2-8.14L11.03 12 8 14.14V9.86zM16 6h2v12h-2z"/>
@@ -565,7 +473,6 @@ const skipVotesRef = useRef(skipVotes)
 
               <VolumeControl audioRef={audioRef} />
 
-              {/* Admin: skip requests panel */}
               {isAdmin && skipRequests.length > 0 && (
                 <div className="skip-requests-panel">
                   {skipRequests.map(r => (
@@ -621,14 +528,10 @@ const skipVotesRef = useRef(skipVotes)
       {loginOpen && !isAdmin && (
         <div className="modal-overlay" onClick={() => setLoginOpen(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            <AdminLoginForm
-              onLogin={login}
-              onSuccess={() => setLoginOpen(false)}
-            />
+            <AdminLoginForm onLogin={login} onSuccess={() => setLoginOpen(false)} />
           </div>
         </div>
       )}
-
     </div>
   )
 }

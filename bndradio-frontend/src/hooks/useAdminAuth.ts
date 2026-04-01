@@ -1,3 +1,6 @@
+// Hook that manages admin JWT authentication.
+// Persists the token in localStorage and exposes isAdmin, login, logout, getAuthHeader.
+// getAuthHeader() returns { Authorization: "Bearer <token>" } for use in fetch calls.
 import { useState, useCallback } from 'react'
 
 const TOKEN_KEY = 'bndradio_admin_token'
