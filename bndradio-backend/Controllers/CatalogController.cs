@@ -1,3 +1,5 @@
+// GET  /songs          — paginated song catalogue (public).
+// DELETE /songs/{id}   — removes a song and its MinIO object (admin only).
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BndRadio.Interfaces;
@@ -6,14 +8,9 @@ namespace BndRadio.Controllers;
 
 [ApiController]
 [Route("songs")]
-public class CatalogController : ControllerBase
+public class CatalogController(ISongRepository repository) : ControllerBase
 {
-    private readonly ISongRepository _repository;
-
-    public CatalogController(ISongRepository repository)
-    {
-        _repository = repository;
-    }
+    private readonly ISongRepository _repository = repository;
 
     [HttpGet]
     public async Task<IActionResult> GetAllAsync([FromQuery] int page = 1, [FromQuery] int pageSize = 50)
@@ -22,7 +19,7 @@ public class CatalogController : ControllerBase
         pageSize = Math.Clamp(pageSize, 1, 200);
 
         var songs = await _repository.GetAllAsync();
-        var total = songs.Count();
+        var total = songs.Count;
         var items = songs
             .Skip((page - 1) * pageSize)
             .Take(pageSize)

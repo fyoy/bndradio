@@ -1,40 +1,32 @@
+// Manages the playback queue using a sliding window of up to 5 songs.
+// Songs are ordered by vote count (descending) then first-voted time (ascending).
+// Reloads the catalogue from the repository every 30 seconds.
+// All window mutations are protected by a SemaphoreSlim lock.
 using BndRadio.Domain;
 using BndRadio.Interfaces;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace BndRadio.Services;
 
-public class QueueManager : IQueueManager, IHostedService
+public class QueueManager(ISongRepository repository, ILogger<QueueManager> logger, PresenceService presence) : IQueueManager, IHostedService
 {
     private const int WindowSize = 5;
-
-    private readonly ISongRepository _repository;
-    private readonly ILogger<QueueManager> _logger;
-    private readonly PresenceService _presence;
+    private readonly ISongRepository _repository = repository;
+    private readonly ILogger<QueueManager> _logger = logger;
+    private readonly PresenceService _presence = presence;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
-    private readonly List<Song> _window = new();
-    private readonly Dictionary<Guid, (int Votes, DateTime FirstVotedAt)> _votes = new();
-    private readonly HashSet<Guid> _recentlyPlayed = new();
-    private List<Song> _allSongs = new();
-    private readonly Dictionary<Guid, DateTime> _playedAt = new();
-    private readonly List<(Guid Id, string Title, DateTime PlayedAt)> _history = new();
-
-    public QueueManager(ISongRepository repository, ILogger<QueueManager> logger, PresenceService presence)
-    {
-        _repository = repository;
-        _logger = logger;
-        _presence = presence;
-    }
+    private readonly List<Song> _window = [];
+    private readonly Dictionary<Guid, (int Votes, DateTime FirstVotedAt)> _votes = [];
+    private List<Song> _allSongs = [];
 
     public Song? CurrentSong
     {
         get
         {
-            _lock.Wait();
-            try { return _window.Count > 0 ? _window[0] : null; }
-            finally { _lock.Release(); }
+            lock (_lock)
+            {
+                return _window.Count > 0 ? _window[0] : null;
+            }
         }
     }
 
@@ -42,9 +34,10 @@ public class QueueManager : IQueueManager, IHostedService
     {
         get
         {
-            _lock.Wait();
-            try { return GetNextSongLocked(); }
-            finally { _lock.Release(); }
+            lock (_lock)
+            {
+                return GetNextSongLocked();
+            }
         }
     }
 
@@ -52,25 +45,16 @@ public class QueueManager : IQueueManager, IHostedService
     {
         Song? finished = null;
 
-        _lock.Wait();
-        try
+        lock (_lock)
         {
             if (_window.Count == 0) return;
             finished = _window[0];
             _window.RemoveAt(0);
             _votes.Remove(finished.Id);
         }
-        finally { _lock.Release(); }
 
         if (finished != null)
         {
-            _recentlyPlayed.Add(finished.Id);
-            _playedAt[finished.Id] = DateTime.UtcNow;
-            lock (_history)
-            {
-                _history.Insert(0, (finished.Id, finished.Title, DateTime.UtcNow));
-                if (_history.Count > 20) _history.RemoveAt(_history.Count - 1);
-            }
             _ = _repository.IncrementPlayCountAsync(finished.Id);
         }
 
@@ -81,8 +65,6 @@ public class QueueManager : IQueueManager, IHostedService
     {
         var song = await _repository.GetByIdAsync(songId);
         if (song == null) return false;
-
-        if (GetVoteCooldownSeconds(songId) > 0) return null;
 
         await _lock.WaitAsync();
         try
@@ -127,21 +109,20 @@ public class QueueManager : IQueueManager, IHostedService
         {
             var songs = await _repository.GetAllAsync();
             await _lock.WaitAsync();
-            try { _allSongs = new List<Song>(songs); }
+            try { _allSongs = [.. songs]; }
             finally { _lock.Release(); }
 
             await RefillWindowAsync();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to reload catalogue.");
+            _logger.LogError(ex, "failed to reload catalogue.");
         }
     }
 
     public IReadOnlyList<(Song Song, int QueuePosition)> GetQueueList()
     {
-        _lock.Wait();
-        try
+        lock (_lock)
         {
             var result = new List<(Song, int)>();
             if (_window.Count == 0) return result;
@@ -158,26 +139,14 @@ public class QueueManager : IQueueManager, IHostedService
 
             return result;
         }
-        finally { _lock.Release(); }
     }
 
     public int GetVoteCount(Guid songId)
     {
-        _lock.Wait();
-        try { return _votes.TryGetValue(songId, out var v) ? v.Votes : 0; }
-        finally { _lock.Release(); }
-    }
-
-    public int GetVoteCooldownSeconds(Guid songId)
-    {
-        if (!_playedAt.TryGetValue(songId, out var playedAt)) return 0;
-        var remaining = TimeSpan.FromMinutes(30) - (DateTime.UtcNow - playedAt);
-        return remaining > TimeSpan.Zero ? (int)remaining.TotalSeconds : 0;
-    }
-
-    public IReadOnlyList<(Guid Id, string Title, DateTime PlayedAt)> GetHistory()
-    {
-        lock (_history) { return _history.ToList(); }
+        lock (_lock)
+        {
+            return _votes.TryGetValue(songId, out var v) ? v.Votes : 0;
+        }
     }
 
     public async Task UnvoteAsync(Guid songId, string sessionId)
@@ -228,19 +197,16 @@ public class QueueManager : IQueueManager, IHostedService
             await _lock.WaitAsync();
             try
             {
-                _allSongs = new List<Song>(fresh);
+                _allSongs = [.. fresh];
 
-                if (_allSongs.Count == 0) { _window.Clear(); _recentlyPlayed.Clear(); return; }
-
-                if (_allSongs.All(s => _recentlyPlayed.Contains(s.Id)))
-                    _recentlyPlayed.Clear();
+                if (_allSongs.Count == 0) { _window.Clear(); return; }
 
                 var inWindow = _window.Select(s => s.Id).ToHashSet();
 
                 while (_window.Count < WindowSize)
                 {
                     var candidate = _allSongs
-                        .Where(s => !_recentlyPlayed.Contains(s.Id) && !inWindow.Contains(s.Id))
+                        .Where(s => !inWindow.Contains(s.Id))
                         .OrderBy(_ => Guid.NewGuid())
                         .FirstOrDefault();
 
@@ -259,7 +225,7 @@ public class QueueManager : IQueueManager, IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to refill queue window.");
+            _logger.LogError(ex, "failed to refill queue window");
         }
     }
 

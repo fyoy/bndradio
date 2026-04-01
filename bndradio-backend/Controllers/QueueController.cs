@@ -1,3 +1,13 @@
+// Queue management endpoints:
+// GET  /queue/list          — full catalogue with vote counts and queue positions.
+// GET  /queue/state         — current song, elapsed time, skip vote count.
+// POST /queue/suggest       — cast a vote for a song.
+// DELETE /queue/suggest     — retract a vote.
+// POST /queue/skip          — admin skips directly; granted users skip once.
+// POST /queue/skip/request  — user requests skip permission from admin.
+// POST /queue/skip/grant    — admin grants skip permission to a session (JWT required).
+// GET  /queue/skip/status   — check if current session has a skip grant.
+// GET  /queue/history       — last 20 played tracks.
 using Microsoft.AspNetCore.Mvc;
 using BndRadio.Interfaces;
 using BndRadio.Services;
@@ -9,22 +19,12 @@ public record GrantSkipRequest(string SessionId);
 
 [ApiController]
 [Route("queue")]
-public class QueueController : ControllerBase
+public class QueueController(IQueueManager queue, IStreamServer stream, ISongRepository repo, PresenceService presence) : ControllerBase
 {
-    private readonly IQueueManager _queueManager;
-    private readonly IStreamServer _streamServer;
-    private readonly ISongRepository _repository;
-    private readonly PresenceService _presence;
-    private readonly RedisCacheService _cache;
-
-    public QueueController(IQueueManager queueManager, IStreamServer streamServer, ISongRepository repository, PresenceService presence, RedisCacheService cache)
-    {
-        _queueManager = queueManager;
-        _streamServer = streamServer;
-        _repository = repository;
-        _presence = presence;
-        _cache = cache;
-    }
+    private readonly IQueueManager _queue = queue;
+    private readonly IStreamServer _stream = stream;
+    private readonly ISongRepository _repo = repo;
+    private readonly PresenceService _presence = presence;
 
     [HttpGet("list")]
     public async Task<IActionResult> GetList()
@@ -32,99 +32,58 @@ public class QueueController : ControllerBase
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
         var myVote = sessionId != null ? _presence.GetVote(sessionId) : null;
 
-        var cacheKey = "queue:list";
-        var cached = await _cache.GetAsync<List<SongListItem>>(cacheKey);
+        var allSongs = await _repo.GetAllAsync();
+        var queueItems = _queue.GetQueueList();
+        var positionById = new Dictionary<Guid, int>();
+        foreach (var (song, pos) in queueItems)
+            if (!positionById.TryGetValue(song.Id, out var ex) || pos < ex)
+                positionById[song.Id] = pos;
 
-        List<SongListItem> baseList;
-        if (cached != null)
-        {
-            baseList = cached;
-        }
-        else
-        {
-            var allSongs = await _repository.GetAllAsync();
-            var queueItems = _queueManager.GetQueueList();
-            var positionById = new Dictionary<Guid, int>();
-            foreach (var (song, pos) in queueItems)
-            {
-                if (!positionById.TryGetValue(song.Id, out var existing) || pos < existing)
-                    positionById[song.Id] = pos;
-            }
-
-            baseList = allSongs.Select(s => new SongListItem(
-                s.Id, s.Title, s.Artist, s.DurationMs, s.PlayCount,
-                positionById.TryGetValue(s.Id, out var p) ? (int?)p : null,
-                _queueManager.GetVoteCount(s.Id),
-                _queueManager.GetVoteCooldownSeconds(s.Id)
-            )).ToList();
-
-            await _cache.SetAsync(cacheKey, baseList, TimeSpan.FromSeconds(1.5));
-        }
-
-        return Ok(baseList.Select(s => new
+        return Ok(allSongs.Select(s => new
         {
             id            = s.Id,
             title         = s.Title,
             artist        = s.Artist,
             durationMs    = s.DurationMs,
             playCount     = s.PlayCount,
-            queuePosition = s.QueuePosition,
+            queuePosition = positionById.TryGetValue(s.Id, out var p) ? (int?)p : null,
             myVote        = myVote.HasValue && myVote.Value == s.Id,
-            voteCount     = s.VoteCount,
-            voteCooldown  = s.VoteCooldown,
+            voteCount     = _queue.GetVoteCount(s.Id),
         }));
     }
 
-    private record SongListItem(
-        Guid Id, string Title, string? Artist, int DurationMs, int PlayCount,
-        int? QueuePosition, int VoteCount, int VoteCooldown);
-
     [HttpGet("state")]
-    public async Task<IActionResult> GetState()
+    public IActionResult GetState()
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
-        var broadcastState = _streamServer.GetBroadcastState();
-        var cId = broadcastState.CurrentSong.Id;
-
+        var state = _stream.GetBroadcastState();
+        var cId = state.CurrentSong.Id;
         return Ok(new
         {
-            current = new { id = cId, title = broadcastState.CurrentSong.Title, artist = broadcastState.CurrentSong.Artist, durationMs = broadcastState.CurrentSong.DurationMs },
-            elapsedMs  = (long)broadcastState.ElapsedInCurrentSong.TotalMilliseconds,
-            skipVotes  = _presence.GetSkipVoteCount(cId),
-            skipNeeded = PresenceService.SkipThreshold,
-            mySkipVote = sessionId != null && _presence.HasVotedSkip(sessionId, cId)
+            current    = new { id = cId, title = state.CurrentSong.Title, artist = state.CurrentSong.Artist, durationMs = state.CurrentSong.DurationMs },
+            elapsedMs  = (long)state.ElapsedInCurrentSong.TotalMilliseconds,
         });
     }
 
     [HttpGet("next")]
     public IActionResult GetNext()
     {
-        var song = _queueManager.NextSong;
-        if (song is null) return NoContent();
-        return Ok(new { id = song.Id, title = song.Title, artist = song.Artist });
+        var song = _queue.NextSong;
+        return song is null ? NoContent() : Ok(new { id = song.Id, title = song.Title, artist = song.Artist });
     }
 
     [HttpGet("current")]
     public IActionResult GetCurrent()
     {
-        var song = _queueManager.CurrentSong;
-        if (song is null) return NoContent();
-        return Ok(new { id = song.Id, title = song.Title, artist = song.Artist });
+        var song = _queue.CurrentSong;
+        return song is null ? NoContent() : Ok(new { id = song.Id, title = song.Title, artist = song.Artist });
     }
 
     [HttpPost("suggest")]
     public async Task<IActionResult> SuggestAsync([FromBody] SuggestRequest request)
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
-
-        var cooldown = _queueManager.GetVoteCooldownSeconds(request.SongId);
-        if (cooldown > 0)
-            return StatusCode(429, new { error = "cooldown", secondsRemaining = cooldown });
-
-        var result = await _queueManager.SuggestAsync(request.SongId, sessionId);
-
-        await _cache.DeleteAsync("queue:list");
-
+        var result = await _queue.SuggestAsync(request.SongId, sessionId);
         return result == true ? Ok() : NotFound();
     }
 
@@ -132,58 +91,32 @@ public class QueueController : ControllerBase
     public async Task<IActionResult> UnvoteAsync([FromBody] SuggestRequest request)
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return BadRequest("X-Session-Id header required");
-
-        await _queueManager.UnvoteAsync(request.SongId, sessionId);
-        await _cache.DeleteAsync("queue:list");
-
+        if (string.IsNullOrWhiteSpace(sessionId)) return BadRequest("X-Session-Id required");
+        await _queue.UnvoteAsync(request.SongId, sessionId);
         return Ok();
     }
 
     [HttpPost("skip")]
-    public async Task<IActionResult> Skip()
+    public IActionResult Skip()
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
-        var current = _queueManager.CurrentSong;
+        var current = _queue.CurrentSong;
         if (current == null) return NoContent();
+        if (string.IsNullOrWhiteSpace(sessionId)) return BadRequest("X-Session-Id required");
 
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return BadRequest("X-Session-Id header required");
-
-        // Admins can skip directly (JWT required)
         bool isAdmin = User.Identity?.IsAuthenticated == true;
-
-        if (!isAdmin)
-        {
-            // Non-admins need a grant from admin
-            if (!_presence.ConsumeSkipGrant(sessionId))
-                return StatusCode(403, new { error = "no_permission", message = "Запросите разрешение у администратора" });
-        }
-
-        // Admin direct skip — bypass vote threshold
-        if (isAdmin)
-        {
-            _presence.ResetSkipVotes(current.Id);
-            _streamServer.SkipCurrent();
-            await _cache.DeleteAsync("queue:state");
-            return Ok(new { skipped = true, votes = 0, needed = PresenceService.SkipThreshold });
-        }
-
-        // Granted user skip — also direct
-        _presence.ResetSkipVotes(current.Id);
-        _streamServer.SkipCurrent();
-        await _cache.DeleteAsync("queue:state");
-        return Ok(new { skipped = true, votes = 0, needed = PresenceService.SkipThreshold });
+        if (!isAdmin && !_presence.ConsumeSkipGrant(sessionId))
+            return StatusCode(403, new { error = "no_permission" });
+            
+        _stream.SkipCurrent();
+        return Ok(new { skipped = true });
     }
 
     [HttpPost("skip/grant")]
     [Microsoft.AspNetCore.Authorization.Authorize]
     public IActionResult GrantSkip([FromBody] GrantSkipRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.SessionId))
-            return BadRequest("sessionId required");
-
+        if (string.IsNullOrWhiteSpace(request.SessionId)) return BadRequest("sessionId required");
         _presence.GrantSkip(request.SessionId);
         return Ok(new { granted = true });
     }
@@ -192,23 +125,17 @@ public class QueueController : ControllerBase
     public IActionResult SkipStatus()
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return BadRequest("X-Session-Id header required");
-
+        if (string.IsNullOrWhiteSpace(sessionId)) return BadRequest("X-Session-Id required");
         return Ok(new { hasGrant = _presence.HasSkipGrant(sessionId) });
     }
 
     [HttpPost("skip/request")]
-    public async Task<IActionResult> RequestSkip()
+    public IActionResult RequestSkip()
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return BadRequest("X-Session-Id header required");
-
-        // Get username from presence
-        var username = _presence.GetUsername(sessionId) ?? (sessionId.Length >= 8 ? sessionId[..8] : sessionId);
+        if (string.IsNullOrWhiteSpace(sessionId)) return BadRequest("X-Session-Id required");
+        var username = _presence.GetUsername(sessionId) ?? sessionId[..Math.Min(8, sessionId.Length)];
         _presence.RequestSkip(sessionId, username);
-
         return Ok(new { requested = true });
     }
 
@@ -216,32 +143,12 @@ public class QueueController : ControllerBase
     public IActionResult CancelSkipRequest()
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
-        if (!string.IsNullOrWhiteSpace(sessionId))
-            _presence.CancelSkipRequest(sessionId);
+        if (!string.IsNullOrWhiteSpace(sessionId)) _presence.CancelSkipRequest(sessionId);
         return Ok();
     }
 
     [HttpGet("skip/requests")]
     [Microsoft.AspNetCore.Authorization.Authorize]
-    public IActionResult GetSkipRequests()
-    {
-        var requests = _presence.GetSkipRequests();
-        return Ok(requests.Select(r => new { sessionId = r.SessionId, username = r.Username }));
-    }
-
-    [HttpGet("history")]
-    public IActionResult GetHistory()
-    {
-        if (_queueManager is QueueManager qm)
-        {
-            var history = qm.GetHistory();
-            return Ok(history.Select(h => new
-            {
-                id = h.Id,
-                title = h.Title,
-                playedAt = h.PlayedAt.ToString("o"),
-            }));
-        }
-        return Ok(Array.Empty<object>());
-    }
+    public IActionResult GetSkipRequests() =>
+        Ok(_presence.GetSkipRequests().Select(r => new { sessionId = r.SessionId, username = r.Username }));
 }

@@ -7,9 +7,9 @@ jobs:
     name: build & deploy
     runs-on: self-hosted
     steps:
-      - name: Clone repository
+      - name: clone repository
         uses: actions/checkout@v4
-      - name: Clear prev data
+      - name: clear old compose data
         run: |
           mkdir -p ${dockerComposePath}/files
           if [[ -e "${dockerComposePath}/docker-compose.yml" ]]; then
@@ -19,13 +19,13 @@ jobs:
           fi
         env:
           dockerComposePath: ${{ secrets.dockerComposePath }}
-      - name: build backend
+      - name: build back
         run: |
           docker build -t bndradio_backend:latest -f bndradio-backend/Dockerfile .
-      - name: build frontend
+      - name: build front
         run: |
           docker build -t bndradio_frontend:latest -f bndradio-frontend/Dockerfile .
-      - name: Deploy
+      - name: deploy
         run: |
           chmod +x pipeline/fill_env.sh && /bin/bash pipeline/fill_env.sh
           cp docker-compose.yml ${dockerComposePath}/docker-compose.yml

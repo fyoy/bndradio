@@ -1,3 +1,6 @@
+// Sidebar catalogue panel — shows all songs with queue positions and vote counts.
+// Listeners can vote to boost a song's priority; admins can delete songs.
+// Polls /queue/list every 5 seconds and re-fetches on refreshKey changes.
 import React, { useState, useEffect, useCallback } from 'react'
 import type { Song } from '../types'
 

@@ -1,3 +1,6 @@
+// Generates and validates JWT tokens used for admin authentication.
+// Tokens are signed with HMAC-SHA256 and expire after 24 hours.
+// The secret is read from JWT_SECRET env var or Admin:JwtSecret config key.
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -32,6 +35,7 @@ public class JwtService
     private SymmetricSecurityKey GetKey() =>
         new(Encoding.UTF8.GetBytes(_secret));
 
+    // Creates a signed JWT with sub=admin, valid for 24 hours.
     public string GenerateToken()
     {
         var now = DateTimeOffset.UtcNow;
@@ -46,6 +50,7 @@ public class JwtService
         return handler.WriteToken(handler.CreateToken(descriptor));
     }
 
+    // Returns true if the token signature and expiry are valid.
     public bool ValidateToken(string token)
     {
         try

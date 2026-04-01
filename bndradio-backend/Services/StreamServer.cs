@@ -1,3 +1,7 @@
+// Reads audio from the repository and broadcasts it to all connected listeners
+// as raw MP3 byte chunks via bounded channels.
+// Paces delivery to match the song's real-time bitrate so listeners stay in sync.
+// Retries repository reads for up to 30 s before pausing the stream.
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using BndRadio.Domain;
@@ -5,11 +9,12 @@ using BndRadio.Interfaces;
 
 namespace BndRadio.Services;
 
-public class StreamServer : IStreamServer, IHostedService
+public class StreamServer(
+    IQueueManager queueManager,
+    ISongRepository repository) : IStreamServer, IHostedService
 {
-    private readonly IQueueManager _queueManager;
-    private readonly ISongRepository _repository;
-    private readonly ILogger<StreamServer> _logger;
+    private readonly IQueueManager _queueManager = queueManager;
+    private readonly ISongRepository _repository = repository;
 
     private readonly ConcurrentDictionary<Guid, Channel<byte[]>> _listeners = new();
 
@@ -19,16 +24,6 @@ public class StreamServer : IStreamServer, IHostedService
     private CancellationTokenSource? _cts;
     private Task? _broadcastTask;
     private CancellationTokenSource _songCts = new();
-
-    public StreamServer(
-        IQueueManager queueManager,
-        ISongRepository repository,
-        ILogger<StreamServer> logger)
-    {
-        _queueManager = queueManager;
-        _repository = repository;
-        _logger = logger;
-    }
 
     public ChannelReader<byte[]> AddListener(CancellationToken ct)
     {
@@ -146,9 +141,8 @@ public class StreamServer : IStreamServer, IHostedService
                 _queueManager.Advance();
                 await _queueManager.ReloadAsync().ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                _logger.LogError(ex, "Error broadcasting song {SongId}", song.Id);
                 _queueManager.Advance();
             }
         }
@@ -170,23 +164,18 @@ public class StreamServer : IStreamServer, IHostedService
             {
                 var stream = await _repository.OpenAudioStreamAsync(songId).ConfigureAwait(false);
 
-                if (paused)
-                    _logger.LogInformation("Song repository recovered; resuming stream for song {SongId}", songId);
-
                 return stream;
             }
             catch (OperationCanceledException)
             {
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 attempts++;
-                _logger.LogWarning(ex, "Repository unavailable (attempt {Attempt}) for song {SongId}", attempts, songId);
 
                 if (attempts >= maxRetries && !paused)
                 {
-                    _logger.LogError("Repository unavailable for 30 s; pausing stream for song {SongId}", songId);
                     PauseAllListeners();
                     paused = true;
                 }

@@ -1,3 +1,5 @@
+// Displays the currently playing track title with a fade transition on change
+// and a CSS marquee animation when the title overflows its container.
 import { useState, useEffect, useRef } from 'react'
 
 interface Props {

@@ -1,3 +1,5 @@
+// POST /auth/login — validates admin credentials and returns a signed JWT.
+// The token is used as a Bearer header for all admin-only endpoints.
 using Microsoft.AspNetCore.Mvc;
 using BndRadio.Services;
 
@@ -30,7 +32,6 @@ public class AuthController : ControllerBase
     {
         if (request.Login != _adminLogin || request.Password != _adminPassword)
             return Unauthorized(new { error = "Invalid credentials" });
-
         var token = _jwtService.GenerateToken();
         return Ok(new { token });
     }

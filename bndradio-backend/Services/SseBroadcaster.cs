@@ -1,35 +1,21 @@
+// Background service that polls state every 800 ms and pushes SSE events
+// only when something has actually changed (hash-based diffing).
+// Broadcasts three event types: "state", "presence", "skip_requests".
 using BndRadio.Interfaces;
 
 namespace BndRadio.Services;
 
-public class SseBroadcaster : BackgroundService
+public class SseBroadcaster(SseHub hub, IQueueManager queue, IStreamServer stream, PresenceService presence, ILogger<SseBroadcaster> logger) : BackgroundService
 {
-    private readonly SseHub _hub;
-    private readonly IQueueManager _queue;
-    private readonly IStreamServer _stream;
-    private readonly PresenceService _presence;
-    private readonly RedisCacheService _cache;
-    private readonly ILogger<SseBroadcaster> _logger;
+    private readonly SseHub _hub = hub;
+    private readonly IQueueManager _queue = queue;
+    private readonly IStreamServer _stream = stream;
+    private readonly PresenceService _presence = presence;
+    private readonly ILogger<SseBroadcaster> _logger = logger;
 
     private string _lastStateHash = "";
     private string _lastPresenceHash = "";
     private string _lastSkipRequestsHash = "";
-
-    public SseBroadcaster(
-        SseHub hub,
-        IQueueManager queue,
-        IStreamServer stream,
-        PresenceService presence,
-        RedisCacheService cache,
-        ILogger<SseBroadcaster> logger)
-    {
-        _hub = hub;
-        _queue = queue;
-        _stream = stream;
-        _presence = presence;
-        _cache = cache;
-        _logger = logger;
-    }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -38,9 +24,7 @@ public class SseBroadcaster : BackgroundService
             try
             {
                 await Task.Delay(800, ct);
-
                 if (_hub.ClientCount == 0) continue;
-
                 await BroadcastStateIfChangedAsync();
                 await BroadcastPresenceIfChangedAsync();
                 await BroadcastSkipRequestsIfChangedAsync();
@@ -52,26 +36,34 @@ public class SseBroadcaster : BackgroundService
 
     private async Task BroadcastStateIfChangedAsync()
     {
-        var broadcastState = _stream.GetBroadcastState();
-        var current = broadcastState.CurrentSong;
+        var state = _stream.GetBroadcastState();
+        var current = state.CurrentSong;
         var next = _queue.NextSong;
-        var skipVotes = _presence.GetSkipVoteCount(current.Id);
 
-        var hash = $"{current.Id}|{next?.Id}|{skipVotes}";
+        var hash = $"{current.Id}|{next?.Id}";
         if (hash == _lastStateHash) return;
         _lastStateHash = hash;
 
-        var payload = new
+        await _hub.BroadcastAsync("state", new
         {
-            current = new { id = current.Id, title = current.Title, durationMs = current.DurationMs },
-            next    = next == null ? null : new { id = next.Id, title = next.Title },
-            elapsedMs  = (long)broadcastState.ElapsedInCurrentSong.TotalMilliseconds,
-            skipVotes,
-            skipNeeded = PresenceService.SkipThreshold,
-        };
+            current    = new { id = current.Id, title = current.Title, durationMs = current.DurationMs },
+            next       = next == null ? null : new { id = next.Id, title = next.Title },
+            elapsedMs  = (long)state.ElapsedInCurrentSong.TotalMilliseconds,
+        });
+    }
 
-        await _cache.SetAsync("queue:state", payload, TimeSpan.FromSeconds(2));
-        await _hub.BroadcastAsync("state", payload);
+    private async Task BroadcastPresenceIfChangedAsync()
+    {
+        var users = _presence.GetActiveUsers();
+        var hash = string.Join("|", users.Select(u => u));
+        if (hash == _lastPresenceHash) return;
+        _lastPresenceHash = hash;
+
+        await _hub.BroadcastAsync("presence", new
+        {
+            count = users.Count,
+            users = users.Select(u => new { username = u }),
+        });
     }
 
     private async Task BroadcastSkipRequestsIfChangedAsync()
@@ -81,19 +73,9 @@ public class SseBroadcaster : BackgroundService
         if (hash == _lastSkipRequestsHash) return;
         _lastSkipRequestsHash = hash;
 
-        var payload = new { requests = requests.Select(r => new { sessionId = r.SessionId, username = r.Username }) };
-        await _hub.BroadcastAsync("skip_requests", payload);
-    }
-
-
-    private async Task BroadcastPresenceIfChangedAsync()
-    {
-        var users = _presence.GetActiveUsers();
-        var hash = string.Join("|", users.Select(u => $"{u.Username}:{u.Color}"));
-        if (hash == _lastPresenceHash) return;
-        _lastPresenceHash = hash;
-
-        var payload = new { count = users.Count, users = users.Select(u => new { username = u.Username, color = u.Color }) };
-        await _hub.BroadcastAsync("presence", payload);
+        await _hub.BroadcastAsync("skip_requests", new
+        {
+            requests = requests.Select(r => new { sessionId = r.SessionId, username = r.Username }),
+        });
     }
 }

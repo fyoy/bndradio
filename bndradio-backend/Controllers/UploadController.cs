@@ -1,3 +1,6 @@
+// POST /songs/upload — accepts a multipart audio file upload (admin only).
+// Validates: MIME type, magic bytes, title length, duplicate title, duplicate hash, duration > 0.
+// On success stores audio in MinIO and metadata in PostgreSQL via ISongRepository.
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BndRadio.Interfaces;
@@ -6,8 +9,8 @@ namespace BndRadio.Controllers;
 
 [ApiController]
 [Route("songs")]
-[RequestSizeLimit(500_000_000)]
-public class UploadController : ControllerBase
+[RequestSizeLimit(30_000_000)]
+public class UploadController(ISongRepository repository) : ControllerBase
 {
     private static readonly HashSet<string> AllowedMimeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -31,12 +34,7 @@ public class UploadController : ControllerBase
         return false;
     }
 
-    private readonly ISongRepository _repository;
-
-    public UploadController(ISongRepository repository)
-    {
-        _repository = repository;
-    }
+    private readonly ISongRepository _repository = repository;
 
     [Authorize]
     [HttpPost("upload")]
@@ -49,14 +47,14 @@ public class UploadController : ControllerBase
             return BadRequest("title must be 200 characters or fewer");
 
         if (file is null || !AllowedMimeTypes.Contains(file.ContentType))
-            return StatusCode(415, "Unsupported audio format");
+            return StatusCode(415, "unsupported audio format");
 
         var existing = await _repository.GetAllAsync();
         var duplicate = existing.Any(s =>
             string.Equals(s.Title, title.Trim(), StringComparison.OrdinalIgnoreCase));
 
         if (duplicate)
-            return Conflict($"Трек «{title}» уже существует в каталоге.");
+            return Conflict($"«{title}» already exists");
 
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms);
@@ -70,7 +68,7 @@ public class UploadController : ControllerBase
 
         var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(ms.ToArray())).ToLowerInvariant();
         if (await _repository.ExistsByHashAsync(hash))
-            return Conflict("Этот файл уже загружен в каталог.");
+            return Conflict("already exists");
 
         ms.Position = 0;
         var tagFile = TagLib.File.Create(new StreamFileAbstraction(file.FileName, ms));
@@ -85,17 +83,11 @@ public class UploadController : ControllerBase
     }
 }
 
-file sealed class StreamFileAbstraction : TagLib.File.IFileAbstraction
+file sealed class StreamFileAbstraction(string name, Stream stream) : TagLib.File.IFileAbstraction
 {
-    private readonly Stream _stream;
+    private readonly Stream _stream = stream;
 
-    public StreamFileAbstraction(string name, Stream stream)
-    {
-        Name = name;
-        _stream = stream;
-    }
-
-    public string Name { get; }
+    public string Name { get; } = name;
     public Stream ReadStream => _stream;
     public Stream WriteStream => _stream;
     public void CloseStream(Stream stream) { }

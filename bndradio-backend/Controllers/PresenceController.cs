@@ -1,7 +1,13 @@
+// Handles listener presence and social features:
+// POST /presence/ping      — heartbeat that keeps a session alive (every ~20 s from frontend).
+// GET  /presence/count     — returns active listener count and user list.
+// POST /presence/announce  — broadcasts a text message to all SSE clients.
+// POST /presence/react     — broadcasts an emoji reaction to all SSE clients.
 using Microsoft.AspNetCore.Mvc;
 using BndRadio.Services;
 using System.Text.RegularExpressions;
 using System.Globalization;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace BndRadio.Controllers;
 
@@ -11,22 +17,13 @@ public record ReactRequest(string? Emoji);
 
 [ApiController]
 [Route("presence")]
-public class PresenceController : ControllerBase
+public class PresenceController(PresenceService presence) : ControllerBase
 {
-    private readonly PresenceService _presence;
-    private readonly SseHub _hub;
-
-    public PresenceController(PresenceService presence, SseHub hub)
-    {
-        _presence = presence;
-        _hub = hub;
-    }
-
+    private readonly PresenceService _presence = presence;
     private static readonly Regex UsernameRegex = new(@"^[\w\s#\-\.]{1,32}$", RegexOptions.Compiled);
-    private static readonly Regex ColorRegex = new(@"^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$", RegexOptions.Compiled);
 
     [HttpPost("ping")]
-    public IActionResult Ping([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] PingRequest? body)
+    public IActionResult Ping([FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PingRequest? body)
     {
         var sessionId = Request.Headers["X-Session-Id"].FirstOrDefault();
         if (string.IsNullOrWhiteSpace(sessionId))
@@ -38,19 +35,12 @@ public class PresenceController : ControllerBase
                 return BadRequest("username must be 32 characters or fewer and contain only letters, digits, spaces, #, -, .");
         }
 
-        if (!string.IsNullOrEmpty(body?.Color))
-        {
-            if (!ColorRegex.IsMatch(body.Color))
-                return BadRequest("color must be a valid hex color (#RGB or #RRGGBB)");
-        }
-
-        _presence.Ping(sessionId, body?.Username, body?.Color);
+        _presence.Ping(sessionId, body?.Username);
 
         return Ok(new
         {
             count = _presence.GetActiveCount(),
-            users = _presence.GetActiveUsers()
-                .Select(u => new { username = u.Username, color = u.Color })
+            users = _presence.GetActiveUsers().Select(u => new { username = u })
         });
     }
 
@@ -59,7 +49,7 @@ public class PresenceController : ControllerBase
     {
         count = _presence.GetActiveCount(),
         users = _presence.GetActiveUsers()
-            .Select(u => new { username = u.Username, color = u.Color })
+            .Select(u => new { username = u })
     });
 
     [HttpPost("announce")]
@@ -79,19 +69,5 @@ public class PresenceController : ControllerBase
             : DateTime.UtcNow.AddSeconds(-5);
         var items = _presence.GetAnnouncesSince(sinceDate);
         return Ok(new { items, now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
-    }
-
-    [HttpPost("react")]
-    public async Task<IActionResult> React([FromBody] ReactRequest body)
-    {
-        if (string.IsNullOrWhiteSpace(body?.Emoji)) return BadRequest();
-
-        var enumerator = StringInfo.GetTextElementEnumerator(body.Emoji);
-        int clusterCount = 0;
-        while (enumerator.MoveNext()) clusterCount++;
-        if (clusterCount > 4) return BadRequest("emoji must be 4 grapheme clusters or fewer");
-
-        await _hub.BroadcastAsync("reaction", new { emoji = body.Emoji });
-        return Ok();
     }
 }

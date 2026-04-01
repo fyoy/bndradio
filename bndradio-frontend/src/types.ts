@@ -1,3 +1,4 @@
+// Shared TypeScript types used across frontend components and hooks.
 export interface Song {
   id: string;
   title: string;
