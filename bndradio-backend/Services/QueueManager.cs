@@ -45,13 +45,16 @@ public class QueueManager(ISongRepository repository, ILogger<QueueManager> logg
     {
         Song? finished = null;
 
-        lock (_lock)
+        _lock.Wait();
+        try
         {
             if (_window.Count == 0) return;
             finished = _window[0];
             _window.RemoveAt(0);
             _votes.Remove(finished.Id);
+            SortWindowLocked();
         }
+        finally { _lock.Release(); }
 
         if (finished != null)
         {
@@ -94,6 +97,8 @@ public class QueueManager(ISongRepository repository, ILogger<QueueManager> logg
 
             if (_window.Count > 0 && _window[0].Id != songId && !_window.Any(s => s.Id == songId))
                 _window.Add(song);
+
+            SortWindowLocked();
         }
         finally { _lock.Release(); }
 
@@ -178,14 +183,21 @@ public class QueueManager(ISongRepository repository, ILogger<QueueManager> logg
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private Song? GetNextSongLocked()
-    {
-        if (_window.Count < 2) return null;
+    private Song? GetNextSongLocked() => _window.Count >= 2 ? _window[1] : null;
 
-        return _window.Skip(1)
+    private void SortWindowLocked()
+    {
+        if (_window.Count < 2) return;
+
+        var current = _window[0];
+        var sorted = _window.Skip(1)
             .OrderByDescending(s => _votes.TryGetValue(s.Id, out var v) ? v.Votes : 0)
             .ThenBy(s => _votes.TryGetValue(s.Id, out var v) ? v.FirstVotedAt : DateTime.MaxValue)
-            .FirstOrDefault();
+            .ToList();
+
+        _window.Clear();
+        _window.Add(current);
+        _window.AddRange(sorted);
     }
 
     private async Task RefillWindowAsync()
@@ -206,11 +218,6 @@ public class QueueManager(ISongRepository repository, ILogger<QueueManager> logg
                 while (_window.Count < WindowSize)
                 {
                     var candidate = _allSongs
-                        .Where(s => !inWindow.Contains(s.Id))
-                        .OrderBy(_ => Guid.NewGuid())
-                        .FirstOrDefault();
-
-                    candidate ??= _allSongs
                         .Where(s => !inWindow.Contains(s.Id))
                         .OrderBy(_ => Guid.NewGuid())
                         .FirstOrDefault();
